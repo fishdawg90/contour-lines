@@ -1,0 +1,49 @@
+#roadBuilder[hidden],#roadBuilder [hidden],#newRoute[hidden]{display:none!important}
+#roadBuilder{position:fixed;inset:0;z-index:5;height:100dvh;display:grid;grid-template-rows:auto minmax(130px,1fr) auto auto;background:#f6f2e5}
+.rb-header{display:flex;align-items:center;gap:10px;background:#18392f;color:#fff8e8;padding:5px 10px}
+.rb-header h2{font-size:clamp(17px,4.8vw,24px);flex:1}
+.rb-header span{color:#dbdcc6;white-space:nowrap;font-size:13px}
+.rb-header button{min-height:40px;color:#244337}
+.rb-map-area{position:relative;min-height:0}
+#rbMap{width:100%;height:100%;position:absolute;inset:0;cursor:crosshair}
+.rb-profile{background:#fffbed;border-top:1px solid #cbd5c1;padding:5px 9px}
+.rb-profile canvas{height:clamp(80px,19vh,156px);cursor:ns-resize}
+.rb-editor{padding:7px 10px max(8px,env(safe-area-inset-bottom));border-top:1px solid #cbd5c1}
+.rb-editor>*{margin:0 0 5px}
+.rb-editor p{font-size:13px;line-height:1.27}
+#rbSummary{font-weight:650;color:#294d40}
+#rbHelp.warning{color:#993f30}
+.rb-options,.rb-actions{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.rb-options button,.rb-actions button{min-height:42px;padding:0 9px;font-size:13px}
+.rb-actions{justify-content:flex-end;margin:4px 0 0}
+#rbNext{background:#28564a;color:white;font-weight:650}
+#rbNext:disabled{background:#d5dacd;color:#56645c}
+#roadBuilder button:disabled{cursor:default;opacity:.57}
+#newRoute{background:#28564a;color:#fff8e6;font-weight:650;margin-left:auto}
+.rb-header{gap:5px}
+.rb-header button{min-height:39px;padding:0 8px;font-size:13px}
+.rb-profile-controls{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.rb-profile-controls label{display:flex;gap:6px;align-items:center;font-size:12px;flex:1;min-width:0}
+.rb-profile-controls input{flex:1;min-width:40px;max-width:180px;accent-color:#674e97}
+.rb-profile-controls output{min-width:2.5em}
+.rb-profile-controls button{min-height:38px;padding:0 8px;font-size:13px}
+@media(max-width:480px){.rb-header h2{font-size:clamp(14px,4vw,19px)}.rb-header button{padding:0 6px}.rb-header span{font-size:11px}.rb-profile canvas{height:clamp(76px,15vh,118px)}}
+
+@media(max-width:480px){.rb-profile-controls{gap:4px;flex-wrap:wrap}.rb-profile-controls label{flex:1 0 52%;font-size:13px}.rb-profile-controls button{padding:0 5px}}
+#rbRoadMode{min-height:40px;max-width:100%;padding:4px 7px;border:1px solid #53665a;border-radius:8px;background:#344139;color:#f0f4eb;font:inherit;font-size:13px}
+#rbProfileLens{position:fixed;z-index:2;width:min(184px,calc(100vw - 18px));overflow:hidden;pointer-events:none;background:#fffbed;color:#354a40;border:1px solid #5d7868;border-radius:10px;box-shadow:0 4px 14px #20312855}
+#rbProfileLensCanvas{display:block;width:100%;height:84px}
+#rbProfileLensReadout{padding:3px 6px;border-top:1px solid #d6ddcc;font:600 11px system-ui;text-align:center}
+#rbCity select{width:100%;min-height:42px;max-width:100%;font:inherit}
+#rbCargo,#rbUpgradeUse{width:100%;min-height:42px;max-width:100%;font:inherit}
+
+#rbLinkTools select{min-height:42px;max-width:100%;padding:4px 8px}
+#rbMapZoomIn,#rbMapZoomOut{min-width:44px;font-size:18px}
+
+#rbUpgradeTools{display:grid;gap:4px}
+#rbStationRoutes[aria-pressed=true]{background:var(--mint,#c8e2ba);color:#203225;font-weight:700}
+#rbUpgradeTools select{max-width:100%;min-height:42px;padding:4px 8px}
+#rbStationAssignments label{display:flex;align-items:center;gap:4px;font-size:12px}
+
+#rbStationGates select{min-height:42px;max-width:100%;padding:4px 8px}
+#rbBaySides button:disabled{opacity:.68}

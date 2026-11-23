@@ -1,0 +1,222 @@
+:root{--coal:#222c28;--edge:#46544b;--pale:#f0f4eb;--mint:#c8e2ba;font:14px/1.35 system-ui,sans-serif;font-variant-numeric:tabular-nums}
+#app{display:block}main{height:100%;background:#ebeadf}header,.caption,.dock,.map-actions,#home,#pan,#orbit{display:none!important}
+#brand,.controls,#networkPanel{position:absolute;background:var(--coal);color:var(--pale);border:1px solid var(--edge);box-shadow:0 4px 18px #20312830;border-radius:14px}
+#brand{top:max(12px,env(safe-area-inset-top));left:12px;display:flex;align-items:center;gap:9px;padding:8px 13px 8px 8px}
+#brand svg{background:#dce8d7;color:#46634d;border-radius:9px;width:34px;height:34px;padding:5px}
+#brand b{letter-spacing:.12em;font-size:13px}#brand small{font-size:12px;display:block;color:#c9d6c8}
+.controls{bottom:max(14px,env(safe-area-inset-bottom));right:12px;display:grid;grid-template-columns:44px 44px;gap:1px;padding:4px}
+.controls button,#networkPanel button,#networkPanel select,.rb-header button,.rb-editor button,.rb-profile-controls button{border:0;border-radius:8px;color:var(--pale);background:#344139;font:inherit;box-shadow:none}
+.controls button{font-size:18px;padding:0}.controls #newRoute,.controls #toolMenu{grid-column:span 2;margin:0;min-height:44px;font-size:14px}.controls #newRoute,#rbNext,.buy{background:var(--mint)!important;color:#22362a!important;font-weight:700}
+#networkPanel{right:116px;bottom:max(14px,env(safe-area-inset-bottom));width:min(310px,calc(100% - 126px));max-height:75dvh;display:flex;flex-direction:column;z-index:2;overflow:hidden;animation:enter .16s ease-out}
+.panelHead{display:flex;align-items:center;padding:4px 4px 4px 12px;border-bottom:1px solid var(--edge)}#panelTitle{font:650 17px system-ui;flex:1}#panelClose{min-width:44px}
+#panelBody{padding:10px;overflow:auto;overscroll-behavior:contain}#panelBody>strong{display:block;margin-bottom:4px}#panelBody small{display:block;color:#bfcebf;font-size:12px;margin:4px 0}
+#panelBody button,#panelBody select{width:100%;margin:2px 0;padding:8px;text-align:left;min-height:44px}#panelBody .back{background:transparent} .ledger{display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid var(--edge)}.ledger strong{text-align:right}.routeItem small{pointer-events:none}
+#roadBuilder{color:var(--pale);background:var(--coal)}.rb-header,.rb-editor,.rb-profile{background:var(--coal);color:var(--pale);border-color:var(--edge)}.rb-header h2{font-family:inherit}.rb-header span,#rbSummary{color:var(--mint)}#rbHelp.warning{color:#ffb8a8}.rb-header button,.rb-editor button,.rb-profile-controls button{min-height:44px;font-size:13px}.rb-profile canvas{background:#fffbed}.rb-editor{max-height:35dvh;overflow:auto}#rbMap{background:#c1caab}#rbHelp{color:#c6d0c5}
+@keyframes enter{from{opacity:0;transform:translateY(5px)}}@media(prefers-reduced-motion:reduce){#networkPanel{animation:none}}
+#settings{position:absolute;z-index:2;top:max(12px,env(safe-area-inset-top));right:12px;min-width:44px;background:var(--coal);color:var(--pale);border-color:var(--edge);font-size:20px;padding:0}
+#mapPlaces{position:absolute;inset:0;pointer-events:none}
+.mapPlace{position:absolute;top:0;left:0;pointer-events:auto;display:grid;grid-template-columns:auto auto;align-items:center;column-gap:5px;min-height:0;padding:4px 6px;background:#22332cf2;color:#f5f5e7;border:1px solid #b9cf9f;border-radius:5px;font-size:11px;line-height:1;white-space:nowrap;box-shadow:0 2px 4px #24372c50}
+.mapPlace[hidden]{display:none}
+.mapPlace small{color:#d4e8bd;font-size:10px}
+.controls{grid-template-columns:54px 54px;z-index:1}
+.controls #routesShortcut{grid-column:span 2;font-size:12px;min-height:44px}
+#networkPanel{right:136px;width:min(310px,calc(100% - 148px))}
+#panelBody .positive{color:#c8e2ba}#panelBody .negative{color:#ffbeab}
+#panelBody .restartAction{background:#74473f}
+@media(max-width:390px){.controls{grid-template-columns:49px 49px}#networkPanel{right:126px;width:calc(100% - 138px)}}
+#brand{text-align:left;border-radius:14px;min-height:44px}#brand b{white-space:nowrap}
+#timeControls{position:absolute;z-index:2;top:max(12px,env(safe-area-inset-top));right:12px;display:flex;gap:4px;align-items:center;color:var(--pale)}
+#timeControls #settings{position:static}
+#speed,#calendar{display:grid;place-items:center;background:var(--coal);border:1px solid var(--edge);border-radius:8px}
+#speed{min-width:42px;padding:0 6px}#calendar{min-height:44px;padding:0 7px;font-size:12px;white-space:nowrap}
+#networkPanel.financePanel{left:12px;right:auto;top:67px;bottom:auto;width:min(410px,calc(100% - 24px));max-height:calc(100% - 84px)}
+.financeChart{margin:12px 0 4px}.financeChart figcaption{font-weight:700}
+.chartLegend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;margin:4px 0}
+.financeChart canvas{width:100%;height:99px;cursor:default;touch-action:pan-y}
+@media(max-width:380px){#brand{gap:5px;padding-right:7px}#brand b{font-size:10px}#brand svg{width:25px;height:25px}#calendar{font-size:10px;padding-inline:5px}#timeControls{right:8px}}
+#panelBody h3{font-size:12px;font-weight:700;color:var(--mint);margin:14px 0 3px}
+
+/* Map inspectors share a compact overview and disclose the ledger on demand. */
+#networkPanel.inspectorPanel{width:min(330px,calc(100% - 148px));max-height:72dvh}
+.inspectorPanel .panelHead{padding-left:14px}
+.inspectorPanel #panelTitle{font-size:15px;line-height:1.25;overflow-wrap:anywhere;padding:5px 7px 5px 0}
+.inspectorPanel #panelClose{background:transparent;color:#d8e3d8}
+.inspectorPanel #panelBody{padding:11px 13px 2px}
+.inspectorContext{color:#aebfb1;font-size:11px;margin:0 0 9px}
+.inspectorNotice{font-size:11px;line-height:1.35;color:#c6d7c7;margin:9px 0 2px}
+.inspectorPanel .warning{color:#f3c49b}
+.inspectorMore{margin-top:10px;border-top:1px solid #405047}
+.inspectorMore summary{list-style:none;display:flex;justify-content:space-between;align-items:center;min-height:44px;color:#d4e2d3;font-size:12px;font-weight:600;cursor:pointer}
+.inspectorMore summary::-webkit-details-marker{display:none}
+.inspectorMore summary::after{content:'';width:6px;height:6px;border-right:1px solid currentColor;border-bottom:1px solid currentColor;transform:rotate(45deg);margin-right:3px}
+.inspectorMore[open] summary::after{transform:rotate(225deg)}
+.inspectorMore summary:focus-visible{outline:2px solid var(--mint);outline-offset:-2px;border-radius:4px}
+.inspectorData .ledger{font-size:12px;border-color:#3c4a41}
+.inspectorData{padding-bottom:8px}
+#panelFooter{display:flex;align-items:center;gap:6px;border-top:1px solid #405047;padding:6px 8px}
+#panelFooter button{min-height:44px;padding:0 8px;font-size:12px}
+#panelFooter .inspectorBack{background:transparent;color:#c7d5c8}
+#panelFooter .buy{margin-left:auto}#panelFooter button:disabled{opacity:.55;cursor:default}
+@media(max-width:390px){#networkPanel.inspectorPanel{width:calc(100% - 138px)}}
+#mapToggles{display:flex;gap:4px}
+#mapToggles button,#serviceToggles button{display:grid;place-items:center;width:38px;min-height:38px;padding:0;border-radius:8px;background:var(--coal);color:var(--pale);border:1px solid var(--edge)}
+#mapToggles button[aria-pressed=true],#serviceToggles button[aria-pressed=true]{background:var(--mint);color:#22362a;border-color:var(--mint)}
+#mapToggles svg,#serviceToggles svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
+@media(max-width:550px){#mapToggles{position:absolute;right:0;top:calc(100% + 4px)}}
+#rbExistingStation{background:#344139;color:var(--pale);border:1px solid #53665a;border-radius:8px;min-height:44px;padding:5px 8px;font:inherit;font-size:13px}
+#townEditor{box-sizing:border-box;width:min(880px,100vw);height:min(740px,100dvh);max-width:none;max-height:none;padding:0;border:1px solid var(--edge);border-radius:12px;color:var(--pale);background:var(--coal);overflow:hidden}
+#townEditor[open]{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto}
+#townEditor::backdrop{background:#19251db8}
+#townEditor .teOptions,#townEditor .teBottom{padding:7px 10px}
+#townEditor .teOptions,#townEditor .teActions{display:flex;flex-wrap:wrap;gap:6px}
+#townEditor label{display:flex;align-items:center;gap:4px;font-size:12px}
+#townEditor label[hidden]{display:none}
+#townEditor button,#townEditor select{background:#35443b;color:var(--pale);border:1px solid var(--edge);border-radius:7px;min-height:38px;padding:4px 8px;font:inherit}
+#townEditor .teMapArea{position:relative;min-height:0}
+#townEditor .teZoom{position:absolute;right:9px;top:9px;display:flex;gap:4px}
+#townEditor .teZoom button{min-width:40px}
+#townEditor .teActions{justify-content:flex-end;margin-top:5px}
+#townEditor .teBottom p{font-size:12px;margin:0 0 4px}
+#townEditor button:disabled{opacity:.45}
+#panelFooter .loopAction{white-space:nowrap}
+#panelFooter:has(.loopAction),#panelFooter:has(.removeVehicle){flex-wrap:wrap}
+.loadingPolicy{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin:.6rem 0;font-size:.85rem}
+.loadingPolicy select{max-width:58%;min-height:38px}
+
+#networkPanel.inspectorPanel #panelBody{padding:5px 9px 1px}
+.inspectorOverview .ledger{font-size:12px;padding:4px 0}
+.inspectorMore{margin-top:3px}
+.inspectorMore summary{min-height:34px}
+.routeFilters{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+#panelBody .routeFilters select{min-width:0;min-height:34px;padding:4px;font-size:11px}
+#panelBody .routeItem{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:5px;align-items:center;min-height:38px;padding:5px 6px;font-size:11px}
+#panelBody .routeItem small{margin:0;font-size:10px;text-align:right;white-space:nowrap}
+.routeKind{color:#d5e7ba}
+.growthSetting{display:grid;grid-template-columns:1fr auto;gap:5px;margin-top:9px;font-size:12px}
+.growthSetting input{grid-column:1/-1;width:100%;accent-color:var(--mint)}
+.mapPlace small[data-trend="Growing"]{color:#d1edaa}
+.mapPlace small[data-trend="Declining"]{color:#ffc0a7}
+#serviceLegend{position:absolute;left:12px;top:calc(max(12px,env(safe-area-inset-top)) + 57px);z-index:1;display:grid;grid-template-columns:repeat(2,auto);gap:3px 6px;background:#222c28ec;border:1px solid var(--edge);border-radius:8px;padding:6px 8px;color:var(--pale);font-size:10px;pointer-events:none}
+#serviceLegend[hidden]{display:none}
+#serviceLegend strong{grid-column:1/-1;font-size:11px}
+#serviceLegend span{border-radius:3px;padding:1px 4px}
+.service-full{background:#2a674d}.service-partial{background:#956114}.service-unmet{background:#924b44}.service-pending{background:#4f626b}
+#serviceLegend small{grid-column:1/-1;color:#c3d3c4;font-size:9px}
+.financeControls{display:grid;grid-template-columns:1fr 1.2fr 1fr;align-items:center;gap:4px}
+#panelBody .financeControls :is(button,select){min-height:36px;text-align:center;padding:4px;font-size:12px}
+#panelBody .financeControls button:disabled{opacity:.4}
+
+.placeServiceRing{position:absolute;inset:-1px;width:calc(100% + 2px);height:calc(100% + 2px);overflow:visible;pointer-events:none;fill:none;stroke-width:2}
+
+#serviceToggles{position:absolute;z-index:2;right:12px;top:calc(max(12px,env(safe-area-inset-top)) + 52px);display:grid;gap:4px}
+#serviceToggles #togglePassengerService[aria-pressed=true]{background:#91d9db;border-color:#91d9db}
+#serviceToggles #toggleTimberService[aria-pressed=true]{background:#e7bb73;border-color:#e7bb73}
+@media(max-width:550px){#serviceToggles{top:calc(max(12px,env(safe-area-inset-top)) + 94px)}}
+@media(max-width:380px){#serviceToggles{right:8px}}
+.routeChoiceColor{width:9px;height:9px;border-radius:50%}
+#panelBody .routeChoice small{white-space:normal}
+.mapPlace small[data-trend="Growing fast"]{color:#d1edaa}
+.mapPlace small[data-trend="Declining fast"]{color:#ffc0a7}
+.balanceFeedback{font-size:12px;color:var(--mint)}
+.balanceFeedback textarea{box-sizing:border-box;width:100%;font:11px monospace}
+#panelBody .routeItem .routeThroughput{grid-column:2/-1;text-align:left;color:#c8d7c6}
+
+.financeTabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-bottom:8px}
+#panelBody .financeTabs button{min-height:38px;padding:5px 2px;font-size:13px}
+#panelBody .financeTabs button[aria-pressed="true"]{background:#c6e3bc;color:#203225;font-weight:700}
+.financeControls.fullRange{grid-template-columns:minmax(0,1fr)}
+.historyNote,.chartDate{display:block;color:#bdcec0;margin:7px 0;font-size:12px}
+.chartDate{margin:2px 0}
+.financeChart canvas{height:124px;cursor:crosshair}
+.depotCargoGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 8px;margin:6px 0}
+.depotCargoGrid label{display:flex;gap:5px;align-items:center;min-height:32px;font-size:13px}
+.depotCargoGrid input{width:17px;height:17px;margin:0;flex:none}
+
+.mapPlace{touch-action:none}
+.mapPlace.industryMapPlace{padding:2px 4px;min-height:14px;font-size:9px;border-color:#c5b680;background:#34382bea;box-shadow:none}
+.industryMapPlace:not(.industryMapDetail) strong,.industryMapDetail .industryMapType{display:none}
+.industryMapPlace small{font-size:9px}
+
+.cargoGlyph{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round;vertical-align:middle}
+#mapPlaces .mapPlace{display:flex;align-items:center;gap:4px;padding:4px 5px;border-color:transparent}
+#mapPlaces .mapPlace[hidden]{display:none}
+#mapPlaces .mapPlace:focus-visible{outline:2px solid #fff6ce;outline-offset:2px}
+#mapPlaces .industryMapPlace{padding:3px 4px}
+.mapPlace .cargoGlyph{width:11px;height:11px}
+.townCargoGlyphs{display:flex;gap:2px}
+.inspectorStats{display:grid;grid-template-columns:repeat(auto-fit,minmax(62px,1fr));gap:4px;margin:3px 0 6px}
+.inspectorStat{display:flex;flex-direction:column;justify-content:center;min-width:0;min-height:36px;padding:4px 6px;background:#2e3d35;border-radius:6px}
+.inspectorStat strong{font-size:13px;line-height:1.15;overflow-wrap:anywhere}
+.inspectorStat span{color:#bdd0c1;font-size:9px;margin-top:2px}
+.inspectorMeters{display:grid;gap:4px;margin:5px 0}
+.inspectorMeterGroup{display:grid;gap:4px}
+.inspectorMeterHeading{color:#bed1c5;font-size:10px;margin:3px 0 0;font-weight:600}
+.inspectorMeter{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:3px 6px;font-size:11px}
+.inspectorMeterLabel{display:flex;align-items:center;gap:4px;min-width:0}
+.inspectorMeterLabel .cargoGlyph{width:13px;height:13px}
+.inspectorMeter progress{grid-column:1/-1;width:100%;height:3px;appearance:none;border:0;border-radius:5px;background:#425148}
+.inspectorMeter progress::-webkit-progress-bar{background:#425148;border-radius:5px}
+.inspectorMeter progress::-webkit-progress-value{background:var(--meter-color,#c4e0b9);border-radius:5px}
+.inspectorMeter progress::-moz-progress-bar{background:var(--meter-color,#c4e0b9);border-radius:5px}
+.inspectorMeter[data-pending] strong{color:#aabeb0}
+.inspectorOverview .inspectorNotice{margin:5px 0 3px}
+.inspectorCargoList{display:flex;flex-wrap:wrap;gap:4px;margin:5px 0}
+.inspectorCargoChip{display:inline-flex;align-items:center;gap:3px;background:#2e3d35;border-radius:5px;padding:3px 5px;font-size:11px}
+.inspectorCargoChip .cargoGlyph{width:13px;height:13px}
+.townInspectorMeters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:9px;margin:5px 0 8px}
+.inspectorMeterGroup .inspectorMeterLabel{overflow-wrap:anywhere}
+.inspectorService{display:flex;align-items:center;gap:4px;margin:3px 0 4px}
+.inspectorService .cargoGlyph{width:13px;height:13px}
+.inspectorStat .positive{color:#c8e2ba}
+.inspectorStat .negative{color:#ffbeab}
+
+#panelBody .stationBayShortcut{width:auto;min-height:30px;padding:3px 8px;font-size:11px}
+
+/* Construction uses the same compact controls and action colour as the network panel. */
+#roadBuilder{display:flex;flex-direction:column;min-height:0}
+#roadBuilder .rb-map-area{flex:1;min-height:72px}
+#roadBuilder .rb-header,#townEditor .rb-header{padding:4px 10px;border-bottom:1px solid var(--edge);gap:4px}
+.rb-header h2{margin:0;font:650 17px/1.2 system-ui}
+#rbStep:not(:empty){border:1px solid var(--edge);border-radius:6px;padding:3px 6px;margin-right:4px}
+#roadBuilder .rb-header button{width:40px;font-size:19px;background:transparent}
+#roadBuilder .rb-editor{flex:0 1 auto;overflow-y:auto;max-height:29dvh;min-height:0;padding:7px 12px 3px;background:var(--coal)}
+#rbSummary{font-size:12px;line-height:1.35;color:#cedecc;margin:0 0 5px}
+#rbSummary:empty,#teStatus:empty,.rb-options:empty{display:none}
+#roadBuilder .rb-options button,#roadBuilder select,#roadBuilder .editorMore summary,#townEditor select{font:500 14px/1.25 system-ui;border-radius:8px;min-height:40px;color:var(--pale);background:#35433b;border:1px solid var(--edge);padding:6px 10px;max-width:100%}
+#roadBuilder .editorMore summary{display:list-item;align-content:center;cursor:pointer}
+.editorMore[open]{flex-basis:100%}
+.editorMore[open] summary{margin-bottom:4px}
+#roadBuilder button[aria-pressed=true],#roadBuilder button[aria-expanded=true]{outline:1px solid var(--mint);background:#435747}
+.editorZoom,#townEditor .teZoom{position:absolute;z-index:1;inset:auto 9px 9px auto;display:flex;padding:3px;gap:2px;border-radius:10px;background:var(--coal)}
+.editorZoom button,#townEditor .teZoom button{min-width:40px;min-height:40px;margin:0;border:0;border-radius:7px;color:var(--pale);background:#344139;font-size:18px}
+#roadBuilder .editorFooter,#townEditor .teBottom{padding:7px 12px max(8px,env(safe-area-inset-bottom));border-top:1px solid var(--edge);background:var(--coal)}
+#roadBuilder #rbHelp,#townEditor #teHelp{border-left:3px solid var(--mint);padding:3px 9px;margin:0 0 7px;font:500 14px/1.35 system-ui;color:var(--pale)}
+#roadBuilder #rbHelp.warning{border-color:#efa88a;color:#ffd6c6}
+#roadBuilder .rb-actions,#townEditor .teActions{justify-content:space-between;align-items:center;margin:0}
+#roadBuilder #rbNext,#teConfirm{margin-left:auto;min-height:44px;padding:0 17px;border-radius:9px}
+#rbNext:disabled,#teConfirm:disabled{opacity:.46}
+#roadBuilder .rb-actions #rbBack,#townEditor #teUndo{background:transparent;border:0;color:var(--pale)}
+#townEditor #teStatus{display:block;margin-bottom:5px;font-size:12px;color:var(--mint)}
+#townEditor #teStatus:empty{display:none}
+@media(max-width:600px){#townEditor[open]{width:100%;height:100dvh;border:0;border-radius:0}}
+@media(max-height:500px){#roadBuilder .rb-editor{max-height:23dvh}#roadBuilder .rb-profile canvas{height:52px}#roadBuilder .rb-profile{max-height:28dvh;overflow:auto}}
+#roadBuilder #rbPreviewAccess:not(:disabled){background:var(--mint);color:#22362a;font-weight:700}
+
+#gameHelp{min-width:38px;min-height:44px;padding:0;border-radius:8px;border:1px solid var(--edge);color:var(--pale);background:var(--coal);font:700 17px system-ui}
+#app[inert] #brand,#app[inert] #timeControls,#app[inert] #mapPlaces,#app[inert] #serviceToggles,#app[inert] .controls{visibility:hidden}
+#startScreen[hidden],#continueGame[hidden]{display:none}
+#startScreen{position:fixed;inset:0;z-index:4;display:flex;align-items:center;overflow:auto;padding:clamp(20px,7vw,108px);color:#f6f5e7;background:linear-gradient(95deg,#172720eb 0%,#172720a6 48%,#17272032 100%)}
+.startCard{width:min(100%,365px);margin-block:auto}
+#gameTitle{font:800 clamp(56px,8vw,112px)/.89 system-ui,sans-serif;letter-spacing:-.075em;margin:0 0 30px}
+#gameSetup{display:grid;gap:11px}
+#gameSetup label{display:grid;gap:4px;font-weight:650;font-size:14px}
+#startScreen select,#startScreen button,#gameInstructions button{width:100%;min-height:44px;border:1px solid #748776;border-radius:8px;background:#25382fed;color:#f6f5e7;padding:7px 10px;font:inherit}
+.startActions{display:flex;gap:8px;margin-top:8px}
+#gameInstructions{width:min(430px,calc(100% - 28px));max-height:calc(100dvh - 28px);overflow:auto;background:var(--coal);color:var(--pale);border:1px solid var(--edge);border-radius:14px;padding:0}
+#gameInstructions::backdrop{background:#0c1913a3}
+#gameInstructions h2{font-size:18px;margin:0;flex:1}
+#gameInstructions ol{padding:0 18px 0 37px;margin:14px 0}
+#gameInstructions li{padding-block:5px}
+#gameInstructions p{padding:0 16px 12px;margin:0;color:#c6d4c4}
+#gameInstructions button{min-width:44px;font-size:18px}
+@media(max-width:540px){#startScreen{align-items:flex-end;background:linear-gradient(0deg,#172720f5 0%,#172720b0 53%,#17272030 100%)}.startCard{margin-block:auto max(0px,env(safe-area-inset-bottom))}#gameTitle{font-size:clamp(56px,14vw,80px)}#brand b{font-size:10px}#brand svg{display:none}#timeControls #settings,#gameHelp{min-width:32px}#speed{min-width:34px}}
