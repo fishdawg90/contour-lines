@@ -1,10 +1,11 @@
-window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,save,restart,stationDepot,editStation,editRailRoute,editRailStation,deleteRailStation,switchRegion,getSpeed,setSpeed,buildRoute,editTown,deleteLoop,deleteRoute}){
+window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,save,restart,stationDepot,editStation,upgradeRailTrack,editRailRoute,editRailStation,deleteRailStation,switchRegion,getSpeed,setSpeed,buildRoute,editTown,deleteLoop,deleteRoute}){
   const el=id=>document.getElementById(id), panel=el('networkPanel'),body=el('panelBody'),footer=el('panelFooter');
   const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   let view='',overlay='routes',routeIndex=0,filter='',type='',mode='',listScroll=0,townId='';
   const cash=n=>Math.round(n).toLocaleString('en-GB')+' cr';
   const amount=new Intl.NumberFormat('en-GB',{maximumFractionDigits:2});
   const profit=period=>period.revenue-period.expenses;
+  let selectedTrack=null,trackFeedback='';
   let routeChoices=[],selectedStop,selectedHome,labels=true,financeEnd=null,financeRange=0,financeView='finances',statsTown='';
   let selectedTrain=null,railDraft=null,railFeedback='';
   const inspectors=new Set(['town','mill','detail','stop','home']);
@@ -1081,7 +1082,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     footer.hidden=!inspectors.has(view)||view==='home'||(view==='stop'&&!selectedStop?.platform.station);
     el('toolMenu').setAttribute('aria-expanded',String(!!view));
     if(!view){delete body.dataset.inspector;return;}
-    const title={tools:'Network tools',build:'New route',routes:'Existing routes',routeChoice:'Choose a route',detail:'Route accounts',towns:'Towns and industries',town:'Town demand',layers:'Map overlays',mill:'Valley Sawmill',settings:'Settings',restart:'Restart valley',deleteLoop:'Delete loop',removeRoute:'Remove route',removeStation:'Remove station',finance:'Company history'}[view];
+    const title={tools:'Network tools',build:'New route',routes:'Existing routes',routeChoice:'Choose a route',track:'Rail track',detail:'Route accounts',towns:'Towns and industries',town:'Town demand',layers:'Map overlays',mill:'Valley Sawmill',settings:'Settings',restart:'Restart valley',deleteLoop:'Delete loop',removeRoute:'Remove route',removeStation:'Remove station',finance:'Company history'}[view];
     if(inspectors.has(view)){
       const name=view==='home'?v.towns.find(t=>t.id===selectedHome.cityId)?.name+' · '+(selectedHome.service==='starter'?'Starter goods':selectedHome.service==='timber'?'Timber':'Passengers'):view==='stop'?selectedStop.platform.name:view==='detail'?routeName(rs[routeIndex]):view==='mill'?sites(v).find(site=>site.id===townId).name:v.towns.find(t=>t.id===townId).name;
       if(el('panelTitle').textContent!==name)el('panelTitle').textContent=name;
@@ -1090,6 +1091,26 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     }
     delete body.dataset.inspector;
     el('panelTitle').textContent=title;body.replaceChildren();
+    if(view==='track'){
+      const track=v.transport.railTracks?.[selectedTrack];
+      if(!track){body.append(node('small','This track is no longer available.'));return;}
+      const stations=v.transport.railStations??{};
+      const name=id=>stations[id]?.name??'Junction';
+      body.append(node('strong',name(track.from)+' → '+name(track.to)));
+      const length=track.points.slice(1).reduce((sum,p,i)=>sum+Math.hypot(p.x-track.points[i].x,p.y-track.points[i].y),0);
+      body.append(row('Length',Math.round(length*40)+' m'),row('Tracks',track.tracks===2?'Double':'Single'));
+      if(track.tracks!==2){
+        const cost=ContourRail.secondTrackCost(track,v.region==='mixed');
+        body.append(button('Add second track · '+cash(cost),()=>{
+          const result=upgradeRailTrack(selectedTrack);
+          trackFeedback=result===true?'Second track built.':result||'The track could not be upgraded.';
+          render();
+        },'menuItem'));
+      }
+      if(trackFeedback)body.append(node('small',trackFeedback));
+      const services=v.transport.routes.filter(r=>r.mode==='rail'&&r.trackIds?.includes(track.id));
+      for(const route of services)body.append(button(routeName(route)+'  ›',()=>{routeIndex=rs.indexOf(route);open('detail');},'menuItem'));
+    }
     if(view==='finance')finance(v);
     if(view==='build'){
       body.append(button('Road route',()=>{open('');buildRoute('road');},'menuItem'));
@@ -1253,5 +1274,5 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     body.scrollTop=scroll;
     if(focused>=0)body.children[focused]?.focus({preventScroll:true});
   }
-  return {render,open,tick,clock,inspectPlace,inspectRoute,inspectVehicle:inspectRoute,inspectRoutes,inspectStop(key,platform){selectedStop={key,platform};open('stop');},inspectHome(cityId,lotId,service){selectedHome={cityId,lotId,service};open('home');},get selectedHome(){return view==='home'?selectedHome:null;},get labels(){return labels;},get activeRoute(){return view==='detail'?routeIndex:null;},get overlay(){return overlay;},get view(){return view;}};
+  return {render,open,tick,clock,inspectTrack(id){selectedTrack=id;trackFeedback='';open('track');},inspectPlace,inspectRoute,inspectVehicle:inspectRoute,inspectRoutes,inspectStop(key,platform){selectedStop={key,platform};open('stop');},inspectHome(cityId,lotId,service){selectedHome={cityId,lotId,service};open('home');},get selectedHome(){return view==='home'?selectedHome:null;},get labels(){return labels;},get activeRoute(){return view==='detail'?routeIndex:null;},get overlay(){return overlay;},get view(){return view;}};
 };

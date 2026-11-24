@@ -519,5 +519,13 @@
     return {x:a.x+(b.x-a.x)*f-dy*lateral,y:a.y+(b.y-a.y)*f+dx*lateral,z:a.z+(b.z-a.z)*f,
       tunnel:Boolean((f<.5?a:b).tunnel),yaw,angle:yaw,pitch:Math.atan2((b.z-a.z)*direction,span),direction};
   }
-  window.ContourRail={locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,runningLane,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trackTangent,trainSpan};
+  function secondTrackCost(track,regional=false){
+    let span=0,bridges=0;
+    for(let i=1;i<track.points.length;i++){
+      const a=track.points[i-1],b=track.points[i],distance=Math.hypot(b.x-a.x,b.y-a.y);
+      span+=distance;if(b.bridge)bridges+=distance;
+    }
+    return Math.round((span*40*245+bridges*40*815)*(regional?.25:1));
+  }
+  window.ContourRail={secondTrackCost,locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,runningLane,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trackTangent,trainSpan};
 })();

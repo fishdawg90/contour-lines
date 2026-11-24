@@ -329,8 +329,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
         const span=length(existing.points);
         reusedLength+=span;
         if(draft.double&&existing.tracks===1){
-          const wet=existing.points.slice(1).reduce((sum,p,i)=>sum+(p.bridge?distance(p,existing.points[i]):0),0);
-          cost+=(span*40*245+wet*40*815)*(getValley().region==='mixed'?.25:1);
+          cost+=ContourRail.secondTrackCost(existing,getValley().region==='mixed');
         }
         continue;
       }
