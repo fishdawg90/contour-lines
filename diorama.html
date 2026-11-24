@@ -44,8 +44,8 @@ canvas:active{cursor:grabbing}
 @media(max-width:400px){.controls{bottom:calc(var(--control-bottom) + 51px)}}
 </style>
 <link rel="stylesheet" href="./road-builder.css">
-<link rel="stylesheet" href="./rail-builder.css">
-<link rel="stylesheet" href="./network.css">
+<link rel="stylesheet" href="./rail-builder.css?v=rail-depot-2">
+<link rel="stylesheet" href="./network.css?v=rail-depot-2">
 </head>
 <body>
 <div id="app">
@@ -129,8 +129,8 @@ canvas:active{cursor:grabbing}
   <ol>
     <li><strong>Check demand.</strong> Tap a town to see what it needs, or an industry to see what it produces.</li>
     <li><strong>Plan a route.</strong> Choose a road or rail route from <em>New route</em>. Connect two towns for passengers, or an industry to a buyer for its cargo.</li>
-    <li><strong>Build and run it.</strong> Place road bays or rail stations, connect them, and review the cost. Use through stations to connect more track later. A second track lets trains pass in opposite directions.</li>
-    <li><strong>Manage your fleet.</strong> Open <em>Existing routes</em> to check deliveries and profit, buy vehicles, and configure locomotives and cars.</li>
+    <li><strong>Build the line.</strong> Check the highlighted houses and streets while placing each station. Use <em>Elevation profile</em> to adjust the alignment before building. Through stations let you extend the railway later.</li>
+    <li><strong>Manage your fleet.</strong> Open a route to check deliveries and profit. For rail, choose <em>Add train</em> or <em>Edit consist</em>. Tap a model to add it, or select a vehicle in the train to move or remove it.</li>
     <li><strong>Reach more homes.</strong> Add a local bus or delivery loop to connect streets around a station.</li>
   </ol>
   <p>Drag to pan and pinch to zoom. Tap the speed control to pause or speed up. Progress saves in this browser.</p>
@@ -193,7 +193,7 @@ canvas:active{cursor:grabbing}
   <div class="teBottom"><strong id="teStatus"></strong><p id="teHelp" class="editorGuide" aria-live="polite"></p>
     <div class="teActions"><button id="teUndo">Undo point</button><button id="teConfirm" class="buy">Build</button></div></div>
 </dialog>
-<script src="./town-network.js"></script><script src="./town-editor.js"></script><script src="./valley-assets.js"></script><script src="./biome-assets.js"></script><script src="./region.js"></script><script src="./freight.js"></script><script src="./rail-sim.js"></script><script src="./rail-assets.js"></script><script src="./economy.js"></script><script src="./finance-charts.js"></script><script src="./route-overlay.js"></script><script src="./hud.js"></script><script src="./network-ui.js"></script><script src="./road-builder.js"></script><script src="./rail-builder.js"></script>
+<script src="./town-network.js"></script><script src="./town-editor.js"></script><script src="./valley-assets.js"></script><script src="./biome-assets.js"></script><script src="./region.js"></script><script src="./freight.js"></script><script src="./rail-sim.js"></script><script src="./rail-assets.js?v=rail-depot-2"></script><script src="./economy.js"></script><script src="./finance-charts.js"></script><script src="./route-overlay.js"></script><script src="./hud.js"></script><script src="./network-ui.js?v=rail-depot-2"></script><script src="./road-builder.js?v=rail-depot-2"></script><script src="./rail-builder.js?v=rail-depot-2"></script>
 <script>
 (() => {
 'use strict';
@@ -982,7 +982,7 @@ function prepareTransport(valley){
     const halfLength=(station.platformLength??2.4)*.5,reach=halfLength+1.7;
     const center=station.terminal?halfLength:0;
     const pad={...station,x:station.x+station.nx*.51-station.ny*center,y:station.y+station.ny*.51+station.nx*center};
-    insert({station:pad,reach,halfLength,halfDepth:.34},pad.x-reach,pad.y-reach,pad.x+reach,pad.y+reach);
+    insert({station:pad,railStation:station,reach,halfLength,halfDepth:.34},pad.x-reach,pad.y-reach,pad.x+reach,pad.y+reach);
   }
   for(const station of valley.transport.extraBays??[]){
     const key=contourStationKey(station);
@@ -1355,7 +1355,9 @@ function levelOnTrial(valley,x,y){
 function blockedByTransport(valley,lot){
   const x=lot.x,y=lot.y;
   for(const item of valley.transportBins.get(Math.floor(x)+','+Math.floor(y))??[]){
-    if(item.station){
+    if(item.railStation){
+      if(ContourRouteEditor.hitsStation(lot,item.railStation,lot.radius??.33))return true;
+    }else if(item.station){
       const s=item.station,dx=x-s.x,dy=y-s.y;
       if(Math.abs(dx*s.nx+dy*s.ny)<(item.halfDepth??.48)+lot.radius&&Math.abs(dy*s.nx-dx*s.ny)<(item.halfLength??.70)+lot.radius)return true;
     }else if(distanceToRoad(x,y,item.a,item.b)<Math.max(.23,item.width)+lot.radius)return true;
@@ -1697,10 +1699,10 @@ function builtStation(s,apron=false,includeAccess=true){
   if(access.length)cityRoad({nodes:access,bridge:false,loop:false});
 }
 
-function railPlatform(station){
+function railPlatform(station,previewTracks){
   const tracks=Object.values(trial.transport.railTracks??{}).filter(t=>t.from===station.id||t.to===station.id);
   const closest=tracks.find(t=>t.tracks===2)??tracks[0];
-  const double=closest?.tracks===2;
+  const double=(previewTracks??closest?.tracks)===2;
   const tx=-station.ny,ty=station.nx;
   const angle=Math.atan2(ty,tx);
   const halfLength=(station.platformLength??2.4)*.5;
@@ -1724,9 +1726,9 @@ function railPlatform(station){
   const depotSide=outside+depth*.78;
   layers.push(...actorFaces(modelActor(model.mesh,station.x+tx*center+station.nx*depotSide,
     station.y+ty*center+station.ny*depotSide,station.z+.089,angle,[k,k,k])));
-  if(station.terminal&&closest){
-    const from=closest.from===station.id,p=closest.points[from?1:closest.points.length-2];
-    const yaw=Math.atan2(p.y-station.y,p.x-station.x);
+  if(station.terminal){
+    const p=closest?.points[closest.from===station.id?1:closest.points.length-2];
+    const yaw=p?Math.atan2(p.y-station.y,p.x-station.x):angle;
     layers.push(...actorFaces(modelActor(ContourRailAssets.buffers(double?2:1),station.x,station.y,station.z,yaw,[1,1,1])));
   }
 }
@@ -1736,10 +1738,14 @@ function railPlatformMarker(station){
   return {x:station.x+station.nx*.39-station.ny*center,y:station.y+station.ny*.39+station.nx*center,z:station.z+.090,
     angle:Math.atan2(station.nx,-station.ny),station,mode:'rail',name:station.name+' rail station'};
 }
-function stationEditorFaces(station,apron){
+function stationEditorFaces(station,apron,tracks){
   const sceneLayers=layers;
   layers=[];
-  try{builtStation(station,apron,false);return layers;}
+  try{
+    if(station.mode==='rail')railPlatform(station,tracks);
+    else builtStation(station,apron,false);
+    return layers;
+  }
   finally{layers=sceneLayers;}
 }
 
@@ -1757,6 +1763,10 @@ function registerRail(transport,route,replace=false){
   });
 }
 
+function applySiteClearance(transport,roads,lots){
+  transport.removedRoads=[...new Set([...transport.removedRoads,...roads])];
+  transport.removedLots=[...new Set([...transport.removedLots,...lots])];
+}
 function buildTransport(route,roads=[],lots=route.removedLots??[]){
   if(route.capital>trial.market.state.cash)return false;
   if(route.mode==='rail')registerRail(trial.transport,route,true);
@@ -1766,8 +1776,7 @@ function buildTransport(route,roads=[],lots=route.removedLots??[]){
   if(route.mode!=='rail'&&trial.transport.roadArchive)route.roadId=(ContourTown.roadEntries(trial.transport).at(-1)?.[0]??-1)+1;
   trial.market.book('capital',route.capital);trial.transport.routes.push(route);trial.market.connect(route);
   if(route.extraBays?.length)(trial.transport.extraBays??=[]).push(...route.extraBays);
-  trial.transport.removedRoads=[...new Set([...trial.transport.removedRoads,...roads])];
-  trial.transport.removedLots=[...new Set([...trial.transport.removedLots,...lots])];
+  applySiteClearance(trial.transport,roads,lots);
   trial.transport.year=growthYear;
   updateTrialButtons();
   prepareTransport(trial);
@@ -3172,7 +3181,7 @@ const routeBuilder=window.createRoadBuilder?.({
 const railBuilder=window.createRailBuilder?.({
   getValley:()=>trial,bounds:trialBounds,heightScale:earthHeight,draftKey,
   begin:()=>setGrowthSpeed(0),finish:()=>{prevTime=0;updateRouteDraftButton();requestFrame();},commit:buildTransport,
-  updateRailRoute,updateRailStation,designSection:routeBuilder.designRailSection
+  updateRailRoute,updateRailStation,stationFaces:stationEditorFaces,designSection:routeBuilder.designRailSection
 });
 const optionsPanel=$('optionsPanel');
 function setOptions(open,restoreFocus=false){
@@ -3536,7 +3545,7 @@ function refreshRailway(){
 function updateRailRoute(index,changes){
   const transport=trial.transport,route=transport.routes[index];
   if(route?.mode!=='rail')return false;
-  const {capital=0,removedLots=[],...plan}=changes;
+  const {capital=0,removedLots=[],removedRoads=[],...plan}=changes;
   if(capital>trial.market.state.cash)return false;
   if((route.cargo==='passengers')!==(plan.cargo==='passengers')&&trial.market.fleet(route).vehicles.length){
     return 'Retire trains before switching between passenger and freight service.';
@@ -3575,12 +3584,14 @@ function updateRailRoute(index,changes){
   registerRail(transport,route,true);
   trial.market.book('capital',capital);
   trial.market.connect(route);
-  transport.removedLots=[...new Set([...transport.removedLots,...removedLots])];
+  applySiteClearance(transport,removedRoads,removedLots);
   refreshRailway();
   return true;
 }
-function updateRailStation(station){
-  if(!trial.transport.railStations?.[station.id])return false;
+function updateRailStation(station,{capital=0,removedRoads=[],removedLots=[]}={}){
+  if(!trial.transport.railStations?.[station.id]||capital>trial.market.state.cash)return false;
+  applySiteClearance(trial.transport,removedRoads,removedLots);
+  if(capital)trial.market.book('capital',capital);
   Object.assign(trial.transport.railStations[station.id],station,{mode:'rail'});
   refreshRailway();
   return true;

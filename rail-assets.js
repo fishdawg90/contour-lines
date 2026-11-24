@@ -42,10 +42,22 @@
       cylinder(x,y,.019,.019,.021,[wheel,'#575b55']);
     }
     for(const x of [-half*.92,half*.92])box(x,0,.025,length*.13,.023,.011,iron);
-    if(diesel||passenger){
+    if(shunter){
+      const cab=-length*.19;
+      box(length*.08,0,.052,length*.79,.070,.041,shell);
+      box(length*.10,0,.093,length*.73,.073,.007,'#775941');
+      box(cab,0,.052,length*.32,.080,.071,shell);
+      box(cab,0,.123,length*.36,.089,.012,'#36433d');
+      for(const y of [-.042,.042]){
+        box(cab,y,.092,length*.205,.005,.023,accent);
+        box(cab,y*1.055,.095,length*.174,.004,.017,'#324a4d');
+        for(const f of [.09,.15,.21,.27])box(length*f,y*.88,.068,length*.017,.004,.018,'#5a5140');
+      }
+      for(const x of [-length*.461,length*.461])box(x,0,.072,.006,.021,.011,'#e4c577');
+    }else if(diesel||passenger){
       box(0,0,.051,length*.91,bodyWidth,diesel?.067:.061,shell);
       box(0,0,.051,length*.912,bodyWidth+.003,.012,accent);
-      const roof=diesel?'#36433d':'#645b50';
+      const roof=diesel?(express?'#39494f':'#36433d'):'#645b50';
       const roofBase=diesel?.118:.112;
       const frame=x=>[[-.041,roofBase],[-.027,roofBase+.013],[.027,roofBase+.013],[.041,roofBase]].map(([y,z])=>[x,y,z]);
       const a=frame(-length*.47),b=frame(length*.47);
@@ -57,6 +69,12 @@
         box(length*u,y*1.045,.085,length*(diesel?.103:.067),.004,.020,'#324a4d');
       }
       if(diesel){
+        for(const y of [-.0395,.0395]){
+          if(express)box(0,y,.078,length*.57,.003,.007,'#798d8f');
+          const count=express?5:7;
+          for(let i=0;i<count;i++)box(length*(i-(count-1)/2)*.038,y,.090,length*.018,.003,.017,
+            express?'#527079':'#344d46');
+        }
         for(const x of [-length*.457,length*.457]){
           box(x,0,.083,.004,.058,.023,'#344c4c');
           box(x*1.015,0,.065,.004,.018,.010,'#e4c577');
@@ -154,5 +172,86 @@
     }
     return model;
   }
-  window.ContourRailAssets={vehicle:railVehicle,trackMesh,buffers,laneOffset};
+  const views=new WeakMap();
+  const previews=new WeakMap();
+  function modelView(model){
+    let view=views.get(model);
+    if(!view){
+      view=model.map(({points,color})=>{
+        const sum=points.reduce((depth,[x,y,z])=>depth-y+z*.32,0);
+        return {points:points.map(([x,y,z])=>[x-y*.34,-z-y*.32]),color,depth:sum/points.length};
+      }).sort((a,b)=>a.depth-b.depth);
+      views.set(model,view);
+    }
+    return view;
+  }
+  function drawPreview(canvas,units){
+    if(!canvas)return;
+    if(!units.length){
+      canvas.getContext('2d')?.clearRect(0,0,canvas.width,canvas.height);
+      previews.delete(canvas);
+      return;
+    }
+    const previous=previews.get(canvas);
+    const width=canvas.clientWidth||previous?.width||canvas.width;
+    const height=canvas.clientHeight||previous?.height||canvas.height;
+    const ratio=canvas.clientWidth?Math.min(2,window.devicePixelRatio||1):1;
+    const key=units.map(unit=>unit.id).join('|')+':'+width+':'+height+':'+ratio;
+    if(previous?.key===key)return;
+    canvas.width=Math.round(width*ratio);
+    canvas.height=Math.round(height*ratio);
+    const ctx=canvas.getContext('2d');
+    if(!ctx)return;
+    ctx.setTransform(ratio,0,0,ratio,0,0);
+    const length=units.reduce((sum,unit)=>sum+unit.length,0);
+    const horizontal=length+.040,vertical=.190;
+    const padding=Math.max(2,Math.min(7,height*.11));
+    const scale=Math.max(1,Math.min((width-padding*2)/horizontal,(height-padding*2)/vertical));
+    const left=(width-length*scale)/2,base=height/2+.065*scale;
+    const shadowHeight=Math.max(1,.019*scale);
+    ctx.fillStyle='rgba(37,43,36,.13)';
+    ctx.beginPath();
+    ctx.ellipse(width/2,base+shadowHeight*.32,length*scale*.52,shadowHeight,0,0,Math.PI*2);
+    ctx.fill();
+    let offset=0;
+    const bounds=[];
+    for(const {id,length,kind} of units){
+      bounds.push({left:(left+offset*scale)/width,right:(left+(offset+length)*scale)/width});
+      const center=left+(offset+length/2)*scale;
+      for(const {points,color} of modelView(railVehicle(id,length,kind))){
+        ctx.beginPath();
+        for(let i=0;i<points.length;i++){
+          const [x,y]=points[i];
+          if(i===0)ctx.moveTo(center+x*scale,base+y*scale);
+          else ctx.lineTo(center+x*scale,base+y*scale);
+        }
+        ctx.closePath();
+        ctx.fillStyle=color;
+        ctx.fill();
+      }
+      offset+=length;
+    }
+    previews.set(canvas,{key,width,height,bounds});
+  }
+  function formationBounds(canvas){
+    return previews.get(canvas)?.bounds??[];
+  }
+  function previewUnit(kind,id){
+    const catalog=kind==='locomotive'?ContourRail.locomotives:ContourRail.cars;
+    if(!Object.hasOwn(catalog,id))return null;
+    const part=catalog[id];
+    const type=kind==='locomotive'?kind:part.type==='passengers'?'passenger':'freight';
+    return {id,kind:type,length:part.length/ContourRail.metresPerUnit};
+  }
+  function renderRailStock(canvas,kind,id){
+    drawPreview(canvas,[previewUnit(kind,id)].filter(Boolean));
+  }
+  function renderRailConsist(canvas,consist){
+    const units=[
+      ...(consist?.locomotives??[]).map(id=>previewUnit('locomotive',id)),
+      ...(consist?.cars??[]).map(id=>previewUnit('car',id)),
+    ].filter(Boolean);
+    drawPreview(canvas,units);
+  }
+  window.ContourRailAssets={vehicle:railVehicle,trackMesh,buffers,laneOffset,renderRailStock,renderRailConsist,formationBounds};
 })();

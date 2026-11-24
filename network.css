@@ -243,15 +243,112 @@
 #panelBody .railManagement button{width:auto;text-align:center}
 #panelBody .railActions button{flex:1 1 80px}
 #panelBody .railManagement button:disabled{opacity:.52;cursor:default}
-.railConsist{background:#2e3d35;border:1px solid #495b50;border-radius:8px;margin:5px 0;padding:7px}
-.railConsist h4{margin:0 0 4px;font-size:13px}
-.railConsist h5{margin:7px 0 1px;color:#c6d9ca;font-size:11px}
-.railStepper{display:grid;grid-template-columns:minmax(0,1fr) 40px 21px 40px;gap:3px;align-items:center;font-size:12px}
-.railStepper output{color:#efeddf;text-align:center;font-variant-numeric:tabular-nums}
-#panelBody .railStepper button{width:100%;font-size:15px}
-.railConsist .inspectorMeters{margin-top:8px}
 #panelBody .railLiveProfile{margin-top:0}
 @media(max-width:440px){
   #networkPanel.railPanel{left:8px;right:116px;width:auto;max-height:76dvh}
-  .railStepper{grid-template-columns:minmax(0,1fr) 36px 16px 36px}
+}
+
+#networkPanel.railDepotPanel{
+  right:24px;width:min(560px,calc(100% - 48px));max-height:min(88dvh,800px);z-index:3
+}
+#networkPanel.railDepotPanel #panelBody{padding:0}
+.railDepotPanel :is(.inspectorOverview,.inspectorMore,.loadingPolicy,#panelFooter){display:none}
+.railDepotPanel .railManagement{margin:0;padding:0;border:0}
+.railDepotPanel .railManagement>div:not(:last-child){display:none}
+.railConsist{
+  --depot-platform:#c9cdb8;--depot-trim:#758471;
+  padding:12px 14px 0;background:#26312b;color:#edf0df;
+}
+.railConsist h4,.railConsist h5{margin:0;font-weight:650}
+.railConsist h4{font-size:23px;line-height:1.1;letter-spacing:-.025em}
+.railConsist h5{font-size:13px}
+.railDepotHeading,.railSectionHeading{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.railDepotHeading{margin-bottom:13px}
+.railDepotHeading>span{color:#bcd6bd;font-size:11px}
+.railSectionHeading{min-height:28px;margin-bottom:4px}
+.railSectionHeading>span{font-size:11px;color:#c3d2c2;font-variant-numeric:tabular-nums}
+.railFormationStage{
+  --formation-height:88px;height:var(--formation-height);position:relative;overflow:hidden;border-radius:8px;
+  background:linear-gradient(to bottom,#e0e1cb 0%,var(--depot-platform) 70%,#a9b5a3 70%);
+  box-shadow:inset 0 0 0 1px #a4ab94;
+}
+.railFormationStage::before{
+  content:'';position:absolute;inset:73% 0 auto;height:10px;
+  background:repeating-linear-gradient(90deg,#74776b 0 7px,transparent 7px 19px);
+  border-block:2px solid #61665c
+}
+.railFormationStage canvas{display:block;position:relative;width:100%;height:100%;object-fit:contain}
+.railStageTargets{
+  position:absolute;inset:0;pointer-events:none;margin-inline:auto;
+  width:min(100%,calc(var(--formation-height) * var(--formation-aspect,4.68)))
+}
+#panelBody .railStageTarget{
+  position:absolute;top:0;bottom:13%;min-height:0;pointer-events:auto;background:transparent;
+  margin:0;padding:0;border-radius:5px;cursor:pointer;
+}
+#panelBody .railStageTarget:hover{background:#eaf5cb32}
+#panelBody .railStageTarget[data-picked=true]{box-shadow:inset 0 -3px #48634b}
+.railSelectionHint{margin:6px 0 2px;color:#c1d3c0;font-size:11px}
+.railFormationStrip{
+  position:relative;display:flex;align-items:stretch;gap:4px;overflow-x:auto;padding:2px 2px 3px;
+  scroll-padding-inline:4px;scrollbar-width:thin;scrollbar-color:#657865 transparent
+}
+#panelBody .railUnit{
+  flex:0 0 var(--stock-size,80px);display:grid;grid-template-rows:24px auto;place-items:center;
+  min-height:45px;margin:0;padding:3px;border:1px solid #46564c;background:#344139;gap:1px
+}
+#panelBody .railUnit[aria-pressed=true]{border-color:#c8e2ba;background:#516a53}
+.railUnit canvas{width:100%;height:24px;object-fit:contain}
+.railUnit span{font-size:9px;line-height:1.15}
+.railSelection{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:2px 7px;padding-block:3px;color:#cadbc9}
+.railSelection>strong{font-size:11px}
+.railSelectionTools,.railStockTabs{display:flex;gap:3px}
+#panelBody .railSelectionTools button{min-width:33px;min-height:34px;padding-inline:7px}
+#panelBody .railStockTabs button{min-height:34px;padding-inline:9px}
+#panelBody .railStockTabs button[aria-pressed=true]{background:#c7dfbb;color:#203225}
+.railGallery,.railReport{margin-top:10px;padding-top:7px;border-top:1px solid #425249}
+.railStockCards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+#panelBody .railStockCard{
+  display:grid;align-content:start;width:100%;min-width:0;gap:2px;margin:0;padding:0 0 6px;
+  border:1px solid #52635a;overflow:hidden;text-align:left;background:#344139
+}
+#panelBody .railStockCard:hover{background:#405447;border-color:#9fc29d}
+.railStockArt{position:relative;display:grid;place-items:center;background:#aab69e;height:57px}
+.railStockArt canvas{width:100%;height:100%;object-fit:contain}
+.railStockAdd{
+  position:absolute;right:4px;top:4px;display:grid;place-items:center;width:21px;height:21px;
+  border-radius:5px;background:#26372c;color:#d4efca;font-size:17px;line-height:1
+}
+.railStockCard>strong,.railStockCard>span{display:block;margin:0 5px;overflow-wrap:anywhere}
+.railStockCard>strong{font-size:11px;line-height:1.18;margin-top:3px;font-weight:700}
+.railStockInfo,.railStockEffect{font-size:9px;line-height:1.2;color:#c4d5c3}
+.railStockPrice{color:#d7eccb;font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}
+.railReportGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin:6px 0}
+.railMetric{min-width:0;padding:4px 5px;border-radius:5px;background:#35453c}
+.railMetricCaption{display:flex;align-items:center;gap:3px;color:#bfd4c0;font-size:10px}
+.railMetricCaption svg{width:13px;height:13px}
+.railMetric>strong,.railMetricDelta{display:block;font-variant-numeric:tabular-nums}
+.railMetric>strong{font-size:13px;margin-top:3px;line-height:1.1}
+.railMetricDelta{color:#b9d9b4;font-size:9px;margin-top:2px}
+.railMechanics{display:flex;flex-wrap:wrap;gap:4px 9px;color:#bfcebe;font-size:10px;margin:0 0 8px}
+.railDepotActions{
+  position:sticky;bottom:0;z-index:1;margin:5px -14px 0;padding:6px 14px 8px;
+  background:#26312b;border-top:1px solid #54665a;box-shadow:0 -8px 12px #202a2552
+}
+.railDepotActions p{margin:0 0 1px;color:#d2e4d1;font-size:11px}
+#panelBody .railDepotActions button{min-height:42px}
+#panelBody .railDepotActions .buy{flex-grow:3}
+.railConsist button:focus-visible{outline:2px solid #f5e8a7;outline-offset:-2px}
+@media(max-width:550px){
+  #networkPanel.railDepotPanel{
+    inset:auto 6px max(6px,env(safe-area-inset-bottom));width:auto;max-height:min(calc(100dvh - 60px),86dvh)
+  }
+  .railConsist{padding:10px 10px 0}
+  .railDepotHeading{margin-bottom:7px}
+  .railConsist h4{font-size:21px}
+  .railDepotActions{margin-inline:-10px;padding-inline:10px}
+}
+@media(max-width:365px){
+  .railReportGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .railSelectionTools{margin-left:auto}
 }

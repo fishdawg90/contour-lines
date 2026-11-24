@@ -364,16 +364,20 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     if(!hasTrain)selectedTrain=null;
     if(railDraft?.vehicle&&!vehicles.includes(railDraft.vehicle)){
       railDraft=null;railFeedback='The train has left the fleet.';
+      panel.classList.remove('railDepotPanel');
     }
     const model=ContourRail;
     const defaultConsist=()=>model.defaultConsist(cargo);
     const copyConsist=({locomotives,cars})=>({locomotives:[...locomotives],cars:[...cars]});
     const action=(label,handler,cls)=>button(label,()=>{handler();render();},cls);
     const startDraft=vehicle=>{
-      railDraft={vehicle,consist:copyConsist(vehicle?.consist??defaultConsist())};railFeedback='';
+      const consist=copyConsist(vehicle?.consist??defaultConsist());
+      railDraft={vehicle,consist,original:copyConsist(consist),selected:{part:'locomotives',index:0},
+        tab:'locomotives',returnScroll:body.scrollTop};
+      railFeedback='';
       render();
-      const editor=section.querySelector('.railConsist');
-      if(editor)body.scrollTop+=editor.getBoundingClientRect().top-body.getBoundingClientRect().top-6;
+      body.scrollTop=0;
+      section.querySelector('.railUnit[aria-pressed="true"]')?.focus({preventScroll:true});
     };
     const unit=cargo==='passengers'?'riders':'loads';
     const kmh=speed=>Math.round(speed??0)+' km/h';
@@ -417,7 +421,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
           if(operating!=null)profile.push(cash(operating)+'/km');
           liveReadout.append(node('small',profile.join(' · '),'railLiveProfile'));
         }
-        const edit=button('Edit consist',()=>startDraft(vehicle));
+        const edit=button('Edit consist',()=>startDraft(vehicle),'railRefitButton');
         const retire=action('Retire train',()=>{
           if(m.retireVehicle(route,vehicle)){if(railDraft?.vehicle===vehicle)railDraft=null;save();redraw();}
         });
@@ -432,84 +436,12 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
         }
       }
     }
-    if(railDraft){
-      const {consist,vehicle}=railDraft;
-      const run=valley.truckRuns[routeIndex];
-      const estimate=railDraft.estimate??=model.estimate(consist,cargo,run);
-      const draft=node('div','','railConsist');
-      draft.append(node('h4',vehicle?'Edit train consist':'New train consist'));
-      const eligibleCars=Object.entries(model.cars).filter(([,item])=>item.type===(cargo==='passengers'?'passengers':'freight'));
-      for(const [title,part,options,limit] of [['Locomotives','locomotives',Object.entries(model.locomotives),4],
-        [cargo==='passengers'?'Coaches':'Wagons','cars',eligibleCars,12]]){
-        draft.append(node('h5',title));
-        for(const [id,item] of options){
-          const line=node('div','','railStepper');
-          const count=consist[part].filter(value=>value===id).length;
-          const name=node('span',item.name);
-          name.title=cash(item.price)+' · '+item.mass+' t empty · '+(part==='cars'?item.capacity+' '+unit:item.power+' kW');
-          const change=(delta)=>{
-            if(delta>0)consist[part].push(id);
-            else consist[part].splice(consist[part].lastIndexOf(id),1);
-            railDraft.estimate=null;
-            railFeedback='';
-          };
-          const minus=action('−',()=>change(-1)),plus=action('+',()=>change(1));
-          minus.dataset.railControl=part+'-'+id+'-remove';plus.dataset.railControl=part+'-'+id+'-add';
-          minus.setAttribute('aria-label','Remove '+item.name);
-          plus.setAttribute('aria-label','Add '+item.name);
-          minus.disabled=!count||consist[part].length<=1;
-          plus.disabled=consist[part].length>=limit;
-          line.append(name,minus,node('output',count),plus);draft.append(line);
-        }
-      }
-      const shortest=Math.min(...route.stations.map(station=>(station.platformLength??2.4)*model.metresPerUnit));
-      const tooLong=estimate.length>shortest;
-      const power=estimate.power,loaded=estimate.loadedMass;
-      const grade=estimate.maxGrade??0,radius=estimate.minRadius??Infinity;
-      const gradeSpeed=estimate.gradeSpeed??model.speedLimit?.(estimate,grade,Infinity);
-      const curveSpeed=estimate.curveSpeed??model.speedLimit?.(estimate,0,radius);
-      const maxSpeed=estimate.maxSpeed;
-      const shortestLocomotive=Math.min(...Object.values(model.locomotives).map(item=>item.length));
-      const maximumCapacity=Math.max(...eligibleCars.map(([,item])=>
-        Math.min(12,Math.max(1,Math.floor((shortest-shortestLocomotive)/item.length)))*item.capacity));
-      draft.append(meters(
-        meter('Capacity',estimate.capacity/maximumCapacity,{cargo,value:estimate.capacity+' '+unit}),
-        meter('Loaded mass',loaded?(loaded-estimate.emptyMass)/loaded:0,{cargo:'mass',value:Math.round(loaded)+' t',label:'Loaded mass · cargo share'}),
-        meter('Steepest grade',Number.isFinite(gradeSpeed)?gradeSpeed/maxSpeed:null,{
-          cargo:'grade',value:grade.toFixed(1)+'%'+(Number.isFinite(gradeSpeed)?' · '+kmh(gradeSpeed):'')}),
-        meter('Tightest curve',Number.isFinite(curveSpeed)?curveSpeed/maxSpeed:null,{
-          cargo:'curve',value:Number.isFinite(radius)?Math.round(radius)+' m'+(Number.isFinite(curveSpeed)?' · '+kmh(curveSpeed):''):'Straight'})));
-      const performance=node('small',power.toLocaleString('en-GB')+' kW · '+estimate.tractiveEffort+' kN');
-      performance.title='Tractive effort is the pull available when starting. Power helps sustain speed once the train is moving.';
-      draft.append(performance,node('small',Math.round(estimate.length)+' m train / '+Math.round(shortest)+' m shortest platform'));
-      const operating=m.railRunningCost?.(consist);
-      if(operating!=null)draft.append(node('small','Running cost · '+cash(operating)+'/km'));
-      if(Number.isFinite(estimate.travel)&&Number.isFinite(estimate.returnTravel)){
-        draft.append(node('small','Loaded travel · '+Math.round(estimate.travel)+' s out / '+Math.round(estimate.returnTravel)+' s back'));
-      }
-      const live=vehicle?m.railStatus(route,vehicle):null;
-      const price=vehicle?m.consistEditPrice(route,vehicle,consist):estimate.price;
-      const unchanged=vehicle&&JSON.stringify(consist)===JSON.stringify(vehicle.consist);
-      const message=railFeedback||(!estimate.valid?estimate.reason:tooLong?'Train exceeds the shortest platform.':
-        estimate.stalled?'The loaded train cannot climb this grade. Add power or remove wagons.':
-        live&&!live.canEdit?(live.hold?'Waiting for an empty train at a station.':'Hold the train to edit at its next station stop.'):
-        m.state.cash<price?'Insufficient funds.':'');
-      if(message)draft.append(node('p',message,'inspectorNotice warning'));
-      const actions=node('div','','railActions');
-      const confirm=action((vehicle?'Apply':'Purchase')+(Number.isFinite(price)?' · '+cash(price):''),()=>{
-        const ok=vehicle?m.setConsist(route,vehicle,copyConsist(consist)):m.purchase(route,copyConsist(consist));
-        if(ok){
-          selectedTrain=vehicle??vehicles.at(-1);railDraft=null;railFeedback='';save();redraw();
-        }else railFeedback=vehicle?'Could not apply this consist.':'Could not purchase this train.';
-      },'buy');
-      confirm.disabled=!estimate.valid||tooLong||estimate.stalled||m.state.cash<price||!!(live&&!live.canEdit)||!!unchanged||
-        (!vehicle&&m.formerDemand(m.routeTrade(route)));
-      actions.append(action('Cancel',()=>{railDraft=null;railFeedback='';}),confirm);
-      draft.append(actions);draftSlot.append(draft);
-    }else if(railFeedback)draftSlot.append(node('p',railFeedback,'inspectorNotice'));
+    if(railDraft)draftSlot.append(renderRailDepot({route,market:m,run:valley.truckRuns[routeIndex],cargo,vehicles,kmh,copyConsist}));
+    else if(railFeedback)draftSlot.append(node('p',railFeedback,'inspectorNotice'));
     const active=document.activeElement;
     if(!section.childElementCount)for(let i=0;i<4;i++)section.append(node('div',''));
     const [controlHolder,liveHolder,actionHolder,draftHolder]=section.children;
+    const stripScroll=draftHolder.querySelector('.railFormationStrip')?.scrollLeft??0;
     controls.dataset.train=controls.querySelector('select')?.value??'';
     const selectorFocused=controlHolder.contains(active)&&active.tagName==='SELECT';
     const activeKey=active?.dataset.railControl;
@@ -520,8 +452,229 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     else replaceContent(actionHolder,trainActions);
     if(section.draft!==railDraft){section.draft=railDraft;draftHolder.replaceChildren(draftSlot);}
     else replaceContent(draftHolder,draftSlot);
+    const strip=draftHolder.querySelector('.railFormationStrip');
+    if(strip){
+      strip.scrollLeft=stripScroll;
+      if(railDraft.reveal){
+        const frame=strip.getBoundingClientRect();
+        const picked=strip.querySelector('[aria-pressed="true"]').getBoundingClientRect();
+        if(picked.right>frame.right)strip.scrollLeft+=picked.right-frame.right+6;
+        else if(picked.left<frame.left)strip.scrollLeft-=frame.left-picked.left+6;
+        railDraft.reveal=false;
+      }
+    }
     if(!active?.isConnected&&activeKey)draftHolder.querySelector('[data-rail-control="'+activeKey+'"]:not(:disabled)')?.focus({preventScroll:true});
     else if(!active?.isConnected&&selectorFocused)controlHolder.querySelector('select')?.focus({preventScroll:true});
+  }
+  function renderRailDepot({route,market,run,cargo,vehicles,kmh,copyConsist}){
+    const draft=railDraft,{consist,vehicle}=draft,model=ContourRail;
+    const passenger=cargo==='passengers',unit=passenger?'riders':'loads',carLabel=passenger?'Coaches':'Wagons';
+    const gradeRun=draft.estimate??=model.estimate(consist,cargo,run);
+    const original=draft.originalEstimate??=model.estimate(draft.original,cargo,run);
+    const grade=gradeRun.maxGrade,radius=gradeRun.minRadius;
+    const hillSpeed=estimate=>Math.round(model.speedLimit(estimate,grade,Infinity));
+    const hill=hillSpeed(gradeRun),curve=Math.round(model.speedLimit(gradeRun,0,radius));
+    const shortest=Math.min(...route.stations.map(station=>(station.platformLength??2.4)*model.metresPerUnit));
+    const spare=shortest-gradeRun.length;
+    const changeText=(current,base,suffix)=>{
+      const delta=Math.round(current-base);
+      return delta?((delta>0?'+':'−')+Math.abs(delta)+' '+suffix):'';
+    };
+    const depot=node('div','','railConsist');
+    const label=node('div','','railDepotHeading');
+    label.append(node('h4',vehicle?'Refit train':'Assemble a train'),node('span',hud.cargoLabel(cargo)));
+    depot.append(label);
+    const change=(handler)=>{
+      handler();draft.estimate=null;railFeedback='';
+      render();
+    };
+    const keyButton=(label,key,handler,cls)=>{
+      const control=button(label,handler,cls);control.dataset.railControl=key;return control;
+    };
+    const groups={locomotives:{label:'Locomotives',kind:'locomotive',catalog:model.locomotives,limit:4},
+      cars:{label:carLabel,kind:passenger?'passenger':'freight',
+        catalog:Object.fromEntries(Object.entries(model.cars).filter(([,item])=>item.type===(passenger?'passengers':'freight'))),limit:12}};
+    const selected=()=>draft.selected;
+    const insert=(part,id)=>change(()=>{
+      const current=selected(),group=consist[part];
+      const index=current.part===part?current.index+1:group.length;
+      group.splice(index,0,id);draft.selected={part,index};draft.reveal=true;
+    });
+    const formation=node('section','','railFormation');
+    const formationHeading=node('div','','railSectionHeading');
+    formationHeading.append(node('h5','Formation'),node('span',gradeRun.length+' m / '+Math.round(shortest)+' m platform',spare<0?'warning':''));
+    const stage=node('div','','railFormationStage');
+    const preview=node('canvas','');
+    preview.width=740;preview.height=158;
+    preview.setAttribute('aria-hidden','true');
+    preview.dataset.formation=JSON.stringify(consist);
+    window.ContourRailAssets?.renderRailConsist(preview,consist,cargo);
+    const bounds=window.ContourRailAssets?.formationBounds(preview)??[];
+    const stageTargets=node('div','','railStageTargets');
+    stageTargets.style.setProperty('--formation-aspect',String(preview.width/preview.height));
+    stageTargets.setAttribute('aria-hidden','true');
+    stage.append(preview,stageTargets);
+    formation.append(formationHeading,stage);
+    const strip=node('div','','railFormationStrip');
+    strip.setAttribute('aria-label','Train formation');
+    let position=0;
+    for(const [part,group] of Object.entries(groups)){
+      consist[part].forEach((id,index)=>{
+        const unit=group.catalog[id],current=selected();
+        const picked=current.part===part&&current.index===index;
+        const choose=()=>{draft.selected={part,index};draft.reveal=true;render();};
+        const select=keyButton('',part+'-'+index,choose,'railUnit');
+        select.style.setProperty('--stock-size',Math.round(20+unit.length*4)+'px');
+        select.setAttribute('aria-label','Select '+unit.name+' '+(index+1)+' of '+consist[part].length);
+        select.setAttribute('aria-pressed',String(picked));
+        select.title=unit.name;
+        select.append(railStockCanvas(group.kind,id,126,52),node('span',unit.name));
+        strip.append(select);
+        const area=bounds[position++];
+        if(area){
+          const hit=button('',()=>{
+            choose();
+            body.querySelector('[data-rail-control="'+part+'-'+index+'"]')?.focus({preventScroll:true});
+          },'railStageTarget');
+          hit.tabIndex=-1;hit.title=unit.name;
+          hit.dataset.picked=String(picked);
+          hit.style.left=area.left*100+'%';hit.style.width=(area.right-area.left)*100+'%';
+          stageTargets.append(hit);
+        }
+      });
+    }
+    formation.append(node('p','Select a vehicle to move, duplicate or remove it.','railSelectionHint'),strip);
+    const {part,index}=selected(),group=groups[part],items=consist[part],selectedId=items[index];
+    const selection=node('div','','railSelection');
+    const selectedName=group.catalog[selectedId].name;
+    selection.append(node('strong',selectedName));
+    const tools=node('div','','railSelectionTools');
+    const move=(delta)=>change(()=>{
+      const next=index+delta;
+      [items[index],items[next]]=[items[next],items[index]];
+      draft.selected={part,index:next};draft.reveal=true;
+    });
+    for(const [icon,description,delta] of [['‹','Move toward front',-1],['›','Move toward rear',1]]){
+      const control=keyButton(icon,'move-'+delta,()=>move(delta));
+      control.title=description;control.setAttribute('aria-label',description);
+      control.disabled=!items[index+delta]||items[index+delta]===selectedId;
+      tools.append(control);
+    }
+    const duplicate=keyButton('Duplicate','duplicate',()=>insert(part,selectedId));
+    duplicate.disabled=items.length>=group.limit;
+    const remove=keyButton('Remove','remove',()=>change(()=>{
+      items.splice(index,1);draft.selected={part,index:Math.min(index,items.length-1)};
+    }));
+    remove.disabled=items.length<=1;
+    if(remove.disabled)remove.title=part==='cars'?'Keep at least one '+(passenger?'coach':'wagon'):'Keep at least one locomotive';
+    tools.append(duplicate,remove);
+    selection.append(tools);formation.append(selection);depot.append(formation);
+
+    const gallery=node('section','','railGallery');
+    const galleryNav=node('div','','railSectionHeading');
+    galleryNav.append(node('h5','Rolling stock'));
+    const tabs=node('div','','railStockTabs');
+    tabs.setAttribute('aria-label','Rolling stock type');
+    for(const [part,{label}] of Object.entries(groups)){
+      const tab=keyButton(label,'tab-'+part,()=>{draft.tab=part;render();});
+      tab.setAttribute('aria-pressed',String(draft.tab===part));tabs.append(tab);
+    }
+    galleryNav.append(tabs);gallery.append(galleryNav);
+    const cards=node('div','','railStockCards');
+    const galleryGroup=groups[draft.tab],galleryItems=consist[draft.tab];
+    for(const [id,item] of Object.entries(galleryGroup.catalog)){
+      const card=keyButton('','add-'+id,()=>insert(draft.tab,id),'railStockCard');
+      card.setAttribute('aria-label','Add '+item.name);
+      const canAdd=galleryItems.length<galleryGroup.limit;
+      card.disabled=!canAdd;
+      const visual=node('span','','railStockArt');
+      visual.append(railStockCanvas(galleryGroup.kind,id,200,88),node('span','+','railStockAdd'));
+      card.append(visual,node('strong',item.name));
+      const info=draft.tab==='cars'?item.capacity+' '+unit+' · '+item.speed+' km/h':item.power.toLocaleString('en-GB')+' kW · '+item.tractiveEffort+' kN';
+      card.append(node('span',info,'railStockInfo'));
+      const trial=copyConsist(consist);
+      trial[draft.tab].push(id);
+      const trialQuote=model.quote(trial,cargo);
+      const hillDelta=trialQuote.valid?changeText(hillSpeed(trialQuote),hill,grade>=.05?'km/h uphill':'km/h on level track'):'';
+      const effect=node('span',!canAdd?'Consist limit reached':trialQuote.length>shortest?'Exceeds platform':hillDelta||'+'+item.length+' m','railStockEffect');
+      if(!canAdd||trialQuote.length>shortest)effect.classList.add('warning');
+      card.append(node('span',cash(item.price),'railStockPrice'),effect);
+      cards.append(card);
+    }
+    gallery.append(cards);depot.append(gallery);
+
+    const report=node('section','','railReport');
+    report.append(node('h5','Loaded on this line'));
+    const power=node('span',gradeRun.power.toLocaleString('en-GB')+' kW · '+gradeRun.tractiveEffort+' kN');
+    power.title='Tractive effort is the pull available when starting. Power helps sustain speed once the train is moving.';
+    const grades=changeText(hill,hillSpeed(original),'km/h');
+    const seats=changeText(gradeRun.capacity,original.capacity,unit);
+    const operating=market.railRunningCost?.(consist);
+    const originalOperating=market.railRunningCost?.(draft.original);
+    const running=operating==null?'—':cash(operating)+'/km';
+    const runningDelta=operating==null||originalOperating==null?'':changeText(operating,originalOperating,'cr/km');
+    const details=node('div','','railReportGrid');
+    for(const [name,value,delta,icon] of [
+      ['Capacity',gradeRun.capacity+' '+unit,seats,cargo],
+      ['Running cost',running,runningDelta,'train'],
+      [grade>=.05?grade.toFixed(1)+'% grade':'Level track',kmh(hill),grades,'grade'],
+      ['Tightest curve',Number.isFinite(radius)?kmh(curve):'Straight',Number.isFinite(radius)?Math.round(radius)+' m radius':'','curve']
+    ]){
+      const metric=node('div','','railMetric');
+      const caption=node('span','','railMetricCaption');caption.append(hud.icon(icon),node('span',name));
+      metric.append(caption,node('strong',value));
+      if(delta)metric.append(node('span',delta,'railMetricDelta'));
+      details.append(metric);
+    }
+    const mechanics=node('div','','railMechanics');
+    mechanics.append(power,node('span',Math.round(gradeRun.loadedMass)+' t loaded'));
+    if(Number.isFinite(gradeRun.travel)&&Number.isFinite(gradeRun.returnTravel)){
+      mechanics.append(node('span',Math.round(gradeRun.travel)+' s out / '+Math.round(gradeRun.returnTravel)+' s back'));
+    }
+    report.append(details,mechanics);depot.append(report);
+
+    const live=vehicle?market.railStatus(route,vehicle):null;
+    const price=vehicle?market.consistEditPrice(route,vehicle,consist):gradeRun.price;
+    const unchanged=vehicle&&JSON.stringify(consist)===JSON.stringify(draft.original);
+    const formerDemand=!vehicle&&market.formerDemand(market.routeTrade(route));
+    const warning=railFeedback||(!gradeRun.valid?gradeRun.reason:spare<0?'Remove '+Math.ceil(-spare)+' m of rolling stock to fit the shortest platform.':
+      gradeRun.stalled?'Add starting pull or remove weight. The loaded train stalls on this line.':
+      market.state.cash<price?'Insufficient funds for this formation.':formerDemand?'This line has no active cargo demand.':'');
+    const dock=node('div','','railDepotActions');
+    const message=node('p',warning||(live&&!live.canEdit?(live.hold?'Train will stop for refit after its next delivery.':'Refit requires an empty train at a station.'):
+      hill<25&&grade>0?'Slow on the steepest grade. Try a stronger locomotive or fewer cars.':''),
+    warning?'warning':'');
+    if(message.textContent){message.setAttribute('role','status');dock.append(message);}
+    const actions=node('div','','railActions');
+    actions.append(keyButton('Cancel','cancel',closeRailDepot));
+    if(live&&!live.canEdit&&!live.hold&&market.setRailHold){
+      actions.append(keyButton('Hold at station','depot-hold',()=>{
+        if(market.setRailHold(route,vehicle,true)){save();redraw();}
+        render();
+      }));
+    }
+    const confirm=keyButton((vehicle?'Apply':'Purchase')+(Number.isFinite(price)?' · '+cash(price):''),'confirm',()=>{
+      const ok=vehicle?market.setConsist(route,vehicle,copyConsist(consist)):market.purchase(route,copyConsist(consist));
+      if(ok){
+        selectedTrain=vehicle??vehicles.at(-1);save();redraw();closeRailDepot();
+      }else{railFeedback=vehicle?'Could not apply this consist.':'Could not purchase this train.';render();}
+    },'buy');
+    confirm.disabled=!gradeRun.valid||spare<0||gradeRun.stalled||market.state.cash<price||!!(live&&!live.canEdit)||!!unchanged||formerDemand;
+    actions.append(confirm);dock.append(actions);depot.append(dock);
+    return depot;
+  }
+  function railStockCanvas(kind,id,width,height){
+    const canvas=node('canvas','');
+    canvas.width=width;canvas.height=height;canvas.dataset.stockKind=kind;canvas.dataset.stockModel=id;
+    canvas.setAttribute('aria-hidden','true');
+    window.ContourRailAssets?.renderRailStock(canvas,kind,id);
+    return canvas;
+  }
+  function closeRailDepot(){
+    const wasRefit=!!railDraft?.vehicle;
+    const scroll=railDraft?.returnScroll??0;
+    railDraft=null;railFeedback='';render();body.scrollTop=scroll;
+    body.querySelector(wasRefit?'.railRefitButton':'.railFleetHeading button')?.focus({preventScroll:true});
   }
   function townInspector(valley,overview,data){
     const m=valley.market,t=valley.towns.find(city=>city.id===townId),tot=m.townTotals(t);
@@ -889,7 +1042,9 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     el('toggleRoutes').setAttribute('aria-pressed',String(overlay==='routes'));panel.hidden=!view;
     panel.classList.toggle('financePanel',view==='finance');
     panel.classList.toggle('inspectorPanel',inspectors.has(view));
-    panel.classList.toggle('railPanel',view==='detail'&&isRail(rs[routeIndex]));
+    const railInspector=view==='detail'&&isRail(rs[routeIndex]);
+    panel.classList.toggle('railPanel',railInspector);
+    panel.classList.toggle('railDepotPanel',railInspector&&!!railDraft);
     footer.hidden=!inspectors.has(view)||view==='home'||(view==='stop'&&!selectedStop?.platform.station);
     el('toolMenu').setAttribute('aria-expanded',String(!!view));
     if(!view){delete body.dataset.inspector;return;}
@@ -1034,9 +1189,9 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
   };
   el('settings').onclick=()=>open(view==='settings'?'':'settings');
   el('routesShortcut').onclick=()=>open(view==='routes'?'':'routes');
-  el('toolMenu').onclick=()=>open(view?'':'tools');el('panelClose').onclick=()=>open(view==='detail'?'routes':'');
+  el('toolMenu').onclick=()=>open(view?'':'tools');el('panelClose').onclick=()=>railDraft?closeRailDepot():open(view==='detail'?'routes':'');
   el('zoomIn').onclick=()=>zoom(1.25);el('zoomOut').onclick=()=>zoom(.8);
-  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&view)open('');});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&view){if(railDraft)closeRailDepot();else open('');}});
   window.addEventListener('popstate',()=>{if(view)open('',true);});
   function tick(){
     const valley=getValley();if(!valley)return;

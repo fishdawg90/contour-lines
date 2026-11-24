@@ -52,15 +52,20 @@ function curve(points,startHeading,endHeading) {
   return [...out, {...points.at(-1)}];
 }
 
-function stationFootprint(s, margin=0) {
-  const tx=-s.ny, ty=s.nx, w=STATION_HALF_WIDTH+margin, h=STATION_HALF_DEPTH+margin;
-  return [[-w,-h],[w,-h],[w,h],[-w,h]].map(([u,v])=>({x:s.x+tx*u+s.nx*v,y:s.y+ty*u+s.ny*v}));
+function footprintExtents(s){
+  if(s.mode!=='rail')return {start:-STATION_HALF_WIDTH,end:STATION_HALF_WIDTH,depth:STATION_HALF_DEPTH};
+  const span=s.platformLength??2.4;
+  return {start:s.terminal?0:-span/2,end:s.terminal?span:span/2,depth:.62};
 }
-
-function hitsStation(p, s, clearance=0) {
-  const x=p.x-s.x,y=p.y-s.y;
-  return Math.abs(x*s.nx+y*s.ny)<STATION_HALF_DEPTH+clearance &&
-    Math.abs(-x*s.ny+y*s.nx)<STATION_HALF_WIDTH+clearance;
+function stationFootprint(s,margin=0){
+  const {start,end,depth}=footprintExtents(s);
+  const w=start-margin,e=end+margin,h=depth+margin;
+  return [[w,-h],[e,-h],[e,h],[w,h]].map(([u,v])=>({x:s.x-s.ny*u+s.nx*v,y:s.y+s.nx*u+s.ny*v}));
+}
+function hitsStation(p,s,clearance=0){
+  const {start,end,depth}=footprintExtents(s);
+  const x=p.x-s.x,y=p.y-s.y,along=-x*s.ny+y*s.nx;
+  return Math.abs(x*s.nx+y*s.ny)<depth+clearance&&along>start-clearance&&along<end+clearance;
 }
 
 // The terrain display exaggerates elevations. Convert a physical 2H:1V
@@ -134,6 +139,7 @@ function verticalDesign(levels,length,heightScale,startGrade=0,endGrade=0,railAp
 window.roadEarthworks={section:sectionEarthwork,design:designTerrain,formation:FORMATION};
 
 function stationRoadConflict(s,nodes){
+  const {start,end,depth}=footprintExtents(s);
   function local(p){
     const x=p.x-s.x,y=p.y-s.y;
     return {x:x*s.nx+y*s.ny,y:-x*s.ny+y*s.nx};
@@ -141,24 +147,253 @@ function stationRoadConflict(s,nodes){
   for(let i=1;i<nodes.length;i++){
     const a=local(nodes[i-1]),b=local(nodes[i]);
     let t0=0,t1=1;
-    for(const [k,extent] of [['x',STATION_HALF_DEPTH+.20],['y',STATION_HALF_WIDTH+.20]]){
+    for(const [k,min,max] of [['x',-depth-.20,depth+.20],['y',start-.20,end+.20]]){
       const d=b[k]-a[k];
-      if(Math.abs(d)<1e-8){if(Math.abs(a[k])>extent){t0=2;break;}continue;}
-      const v=(-extent-a[k])/d,w=(extent-a[k])/d;
+      if(Math.abs(d)<1e-8){if(a[k]<min||a[k]>max){t0=2;break;}continue;}
+      const v=(min-a[k])/d,w=(max-a[k])/d;
       t0=Math.max(t0,Math.min(v,w));t1=Math.min(t1,Math.max(v,w));
     }
-    if(t0<=t1)return true;
+    if(t0<=t1){
+      const z=lerp(nodes[i-1].z??s.z,nodes[i].z??s.z,(t0+t1)/2);
+      if(s.mode!=='rail'||Math.abs(z-s.z)<.28)return true;
+    }
   }
   return false;
 }
+
+function tracePath(context,points,screen){
+  context.beginPath();
+  points.forEach((p,i)=>{const q=screen(p);if(i)context.lineTo(q.x,q.y);else context.moveTo(q.x,q.y);});
+}
+function createTerrainPainter(){
+  const terrainCanvas=document.createElement('canvas'),terrainCtx=terrainCanvas.getContext('2d');
+  let cacheKey;
+  return function drawTerrain({ctx,width,height,valley,bounds,view,scaleHint,screen,world,detail}){
+    const key=[view.x,view.y,view.zoom,width,height,valley.region,valley.seed,detail].join('/');
+    if(key!==cacheKey){
+      cacheKey=key;terrainCanvas.width=width;terrainCanvas.height=height;
+      terrainCtx.fillStyle='#f0ead9';terrainCtx.fillRect(0,0,width,height);
+      const stepSize=detail?.5:Math.max(.95,2.8/scaleHint);
+      const min=world({x:0,y:0}),max=world({x:width,y:height});
+      const startX=Math.max(bounds.west,Math.floor(min.x/stepSize)*stepSize);
+      const startY=Math.max(bounds.north,Math.floor(min.y/stepSize)*stepSize);
+      for(let y=startY;y<Math.min(max.y,bounds.south);y+=stepSize)for(let x=startX;x<Math.min(max.x,bounds.east);x+=stepSize){
+        const midX=x+stepSize*.5,midY=y+stepSize*.5;
+        const a=screen({x,y}),z=valley.ground(midX,midY);
+        const zone=valley.biome?.(midX,midY);
+        const hue=zone==='western'?34:zone==='swamp'?96:76;
+        terrainCtx.fillStyle='hsl('+Math.round(hue-z*3)+' '+(zone==='western'?39:25)+'% '+Math.round(73-z*7)+'%)';
+        terrainCtx.fillRect(a.x,a.y,stepSize*scaleHint+.5,stepSize*scaleHint+.5);
+        terrainCtx.strokeStyle='#41594247';terrainCtx.lineWidth=1;terrainCtx.beginPath();
+        if(valley.ground(midX+stepSize,midY)<z){terrainCtx.moveTo(a.x+stepSize*scaleHint,a.y);terrainCtx.lineTo(a.x+stepSize*scaleHint,a.y+stepSize*scaleHint);}
+        if(valley.ground(midX,midY+stepSize)<z){terrainCtx.moveTo(a.x,a.y+stepSize*scaleHint);terrainCtx.lineTo(a.x+stepSize*scaleHint,a.y+stepSize*scaleHint);}
+        terrainCtx.stroke();
+      }
+      const segments=Math.ceil((bounds.south-bounds.north)/.55);
+      const waterways=[];
+      for(let i=0;i<=segments;i++){
+        const y=lerp(bounds.north,bounds.south,i/segments);
+        const channels=valley.channels?.(y)??[[valley.riverX(y),valley.riverWidth(y),'valley']];
+        channels.forEach(([x,w,zone],index)=>{
+          const channel=waterways[index]??={left:[],right:[],zone};
+          channel.left.push({x:x-w,y});channel.right.push({x:x+w,y});
+        });
+      }
+      for(const {left,right,zone} of waterways){
+        tracePath(terrainCtx,[...left,...right.reverse()],screen);terrainCtx.closePath();
+        terrainCtx.fillStyle=zone==='swamp'?'#78958a':'#78aaa9';terrainCtx.fill();
+      }
+      if(detail){
+        terrainCtx.strokeStyle='#f6f2dd80';terrainCtx.lineWidth=1;terrainCtx.beginPath();
+        const grid=scaleHint>46?.25:1;
+        for(let x=Math.ceil(min.x/grid)*grid;x<max.x;x+=grid){
+          const q=screen({x,y:min.y});terrainCtx.moveTo(q.x,0);terrainCtx.lineTo(q.x,height);
+        }
+        for(let y=Math.ceil(min.y/grid)*grid;y<max.y;y+=grid){
+          const q=screen({x:min.x,y});terrainCtx.moveTo(0,q.y);terrainCtx.lineTo(width,q.y);
+        }
+        terrainCtx.stroke();
+      }
+    }
+    ctx.drawImage(terrainCanvas,0,0);
+  }
+
+}
+
+function drawTownMap({ctx,screen,line,scaleHint,w,h,valley,lots,roads,lost,served,roadConflicts,deleted}){
+    for(const lot of lots){
+      const q=screen(lot), hit=lost.has(lot.key);
+      const size=Math.max(2,(lot.w??.50)*scaleHint);
+      if(q.x<-20||q.y<-20||q.x>w+20||q.y>h+20)continue;
+      ctx.save();ctx.translate(q.x,q.y);ctx.rotate(lot.angle??0);
+      ctx.fillStyle=hit?'#b9503c':served.has(lot.key)?'#3e885f':'#a97254';ctx.fillRect(-size/2,-size/2,size,size*.9);ctx.restore();
+    }
+    for(const row of roads){
+      const removed=deleted.has(row.key);
+      const conflict=roadConflicts.has(row.key);
+      if(removed)ctx.setLineDash([5,4]);
+      line(row.road.nodes,removed?'#a6493e':conflict?'#ffe2a9':'#f2dfad',Math.max(conflict?7:2,.43*scaleHint));
+      if(!removed)line(row.road.nodes,conflict?'#b4483b':'#56615e',Math.max(conflict?4:1.25,.315*scaleHint));
+      ctx.setLineDash([]);
+    }
+    for(const [,route] of ContourTown.roadEntries(valley.transport))for(const path of ContourTown.roadSections(route)){
+      line(path,'#fff0be',Math.max(2,.48*scaleHint));
+      line(path,'#234c5b',Math.max(1.5,.34*scaleHint));
+    }
+}
+
+function drawProfileBase({canvas,c,g,ratio,path,length,heightScale}){
+    if(canvas.width!==Math.round(g.w*ratio)||canvas.height!==Math.round(g.h*ratio)){canvas.width=Math.round(g.w*ratio);canvas.height=Math.round(g.h*ratio);}
+    c.setTransform(ratio,0,0,ratio,0,0);c.clearRect(0,0,g.w,g.h);
+    const y=z=>g.bottom-(z-g.min)/(g.max-g.min)*(g.bottom-g.top);
+    const x=f=>lerp(g.left,g.right,f);
+    c.font='11px system-ui';c.fillStyle='#44594e';c.strokeStyle='#cbd5c7';c.lineWidth=1;
+    for(let i=0;i<4;i++){
+      const z=lerp(g.min,g.max,i/3),p=y(z);
+      c.beginPath();c.moveTo(g.left,p);c.lineTo(g.right,p);c.stroke();
+      c.fillText(Math.round(z*heightScale)+' m',3,p+3);
+    }
+    const points=path;
+    c.beginPath();points.forEach((p,i)=>{const f=p.d/length;if(i)c.lineTo(x(f),y(p.ground));else c.moveTo(x(f),y(p.ground));});
+    c.strokeStyle='#8c7f55';c.lineWidth=1.6;c.stroke();
+    return {x,y};
+}
+
+function drawProfileCurve(context,x,y,start,end,samples,width,design,heightScale,gradeLimit){
+    const distances=Array.from({length:samples+1},(_,i)=>lerp(start,end,i/samples));
+    for(const curve of design.curves)for(const d of [curve.d-curve.half,curve.d,curve.d+curve.half]){
+      if(d>start&&d<end)distances.push(d);
+    }
+    distances.sort((a,b)=>a-b);
+    context.lineWidth=width;
+    context.lineCap='round';
+    for(let i=1;i<distances.length;i++){
+      const a=distances[i-1],b=distances[i],middle=(a+b)/2;
+      if(b-a<1e-8)continue;
+      const low=design.elevation(a),high=design.elevation(b);
+      const rounded=design.curves.some(curve=>Math.abs(middle-curve.d)<curve.half);
+      const grade=Math.abs(high-low)*heightScale/((b-a)*WORLD_METRES)*100;
+      context.strokeStyle=grade>gradeLimit+.001?'#aa4733':rounded?'#674e97':'#1f6c79';
+      context.beginPath();
+      context.moveTo(x(a),y(low));context.lineTo(x(b),y(high));context.stroke();
+    }
+  }
+
+function protectedRoad(valley,key){
+    return (valley.transport.stationAccesses??[]).some(access=>access.tie.key===key)||
+      valley.builtStations.some(s=>s.tie?.key===key)||(valley.transport.localRoutes??[]).some(route=>route.roadKeys?.includes(key)??key.startsWith(route.city+':'))||
+      valley.transport.routes.some(route=>route.roadKeys?.includes(key));
+}
+
+function cityRoadRows(valley){
+  return valley.towns.flatMap(city=>ContourTown.openRoads(valley,city).map(road=>({key:roadKey(city,road),road,city})));
+}
+function builtLots(valley){
+  return valley.towns.flatMap(city=>valley.market.homes(city).map(lot=>({...lot,key:lotKey(city,lot)})));
+}
+function createStationPainter(stationFaces,area){
+  const stationFaceCache=new Map();
+  function paint(station,apron=false,tracks=1){
+    if(!stationFaces){area(stationFootprint(station),'#68766d');return;}
+    const key=JSON.stringify([station.x,station.y,station.z,station.nx,station.ny,station.place,station.millBay,station.bayUse,station.mode,station.platformLength,station.terminal,tracks,apron]);
+    if(!stationFaceCache.has(key)){
+      if(stationFaceCache.size>=96)stationFaceCache.delete(stationFaceCache.keys().next().value);
+      const faces=stationFaces(station,apron,tracks),depth=face=>face.points.reduce((sum,p)=>sum+p[2]+(p[1]-station.y)*.10,0)/face.points.length;
+      stationFaceCache.set(key,faces.sort((a,b)=>depth(a)-depth(b)));
+    }
+    for(const {points,color} of stationFaceCache.get(key)){
+      area(points.map(([x,y,z])=>({x:x+(z-station.z)*.28,y:y-(z-station.z)*.46})),color);
+    }
+  }
+  paint.clear=()=>stationFaceCache.clear();
+  return paint;
+}
+
+function pointerAt(event,canvas){
+  const rect=canvas.getBoundingClientRect();
+  return {x:event.clientX-rect.left,y:event.clientY-rect.top};
+}
+function bindProfileEditor(canvas,{editable,model,bounds,values,before,defaultRadius,drag,finish}){
+  let gesture=null;
+  canvas.addEventListener('pointerdown',event=>{
+    if(!editable()||event.button!==0||gesture)return;
+    const p=pointerAt(event,canvas),g=bounds(),section=model();
+    const [start,end]=section.design.approaches;
+    const run=section.length-start-end;
+    const f=x=>((x-g.left)/(g.right-g.left)*section.length-start)/run;
+    const z=y=>lerp(g.min,g.max,clamp((g.bottom-y)/(g.bottom-g.top),-.2,1.2));
+    const vips=values(),snapshot=before();
+    let index=vips.findIndex(v=>Math.hypot(
+      g.left+(start+v.f*run)/section.length*(g.right-g.left)-p.x,
+      g.bottom-(v.z-g.min)/(g.max-g.min)*(g.bottom-g.top)-p.y)<17);
+    if(index<0){
+      const fraction=f(p.x);
+      if(fraction<.025||fraction>.975||vips.some(v=>Math.abs(v.f-fraction)<.025))return;
+      const newPoint={f:fraction,z:z(p.y),radius:defaultRadius};
+      vips.push(newPoint);
+      vips.sort((a,b)=>a.f-b.f);
+      index=vips.indexOf(newPoint);
+    }
+    const vip=vips[index];
+    gesture={id:event.pointerId,index,before:snapshot,scale:g,pointer:p,f,z,
+      offsetF:vip.f-f(p.x),offsetZ:vip.z-z(p.y)};
+    canvas.setPointerCapture(event.pointerId);
+    drag(gesture);
+  });
+  canvas.addEventListener('pointermove',event=>{
+    if(gesture?.id!==event.pointerId||!editable())return;
+    const p=pointerAt(event,canvas),i=gesture.index,vips=values(),vip=vips[i];
+    if(!vip)return;
+    gesture.pointer=p;
+    vip.f=clamp(gesture.f(p.x)+gesture.offsetF,(vips[i-1]?.f??0)+.025,(vips[i+1]?.f??1)-.025);
+    vip.z=gesture.z(p.y)+gesture.offsetZ;
+    drag(gesture);
+  });
+  for(const event of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(event,e=>{
+    if(gesture?.id!==e.pointerId)return;
+    const completed=gesture;
+    gesture=null;
+    finish(completed);
+  });
+  return ()=>{gesture=null;};
+}
+
+function endpointControls(valley,places,origin,destination,onSelect){
+  if(!valley.region)return places.map(place=>{
+    const button=document.createElement('button');
+    button.type='button';button.textContent=place.name;button.dataset.city=place.id;
+    button.onclick=()=>onSelect(place);
+    return button;
+  });
+  const choosingEnd=origin&&!destination;
+  const label=choosingEnd?'Choose destination':'Choose origin';
+  const select=document.createElement('select');
+  select.setAttribute('aria-label',label);
+  const placeholder=new Option(label+'…','');
+  placeholder.disabled=true;select.add(placeholder);
+  for(const [zone,name] of Object.entries(ContourRegion.names)){
+    const group=document.createElement('optgroup');group.label=name;
+    for(const place of places.filter(place=>place.biome===zone)){
+      if(choosingEnd&&!valley.market.trade(origin,place))continue;
+      const cargo=place.output?' · '+ContourRegion.goods[place.output][0]:place.depot?' · Trading depot':'';
+      group.append(new Option(place.name+cargo,place.id));
+    }
+    if(group.children.length)select.append(group);
+  }
+  select.selectedIndex=0;
+  select.onchange=()=>onSelect(places.find(place=>place.id===select.value));
+  return [select];
+}
+window.ContourRouteEditor={endpointControls,createTerrainPainter,createStationPainter,drawTownMap,drawProfileBase,drawProfileCurve,stationFootprint,
+  hitsStation,stationRoadConflict,protectedRoad,cityRoadRows,builtLots,tracePath,pointerAt,bindProfileEditor};
 
 window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightScale,draftKey,stationFaces,begin,commit,upgradeStation,finish}) {
   const $=id=>document.getElementById(id);
   const root=$('roadBuilder'), map=$('rbMap'), ctx=map.getContext('2d'), section=$('rbProfile');
   const lens=$('rbProfileLens'),lensCanvas=$('rbProfileLensCanvas');
-  const terrainCanvas=document.createElement('canvas'), terrainCtx=terrainCanvas.getContext('2d');
+  const renderTerrain=createTerrainPainter();
   let stationEdit=null, draft=null, step=0, selected=-1, deleteMode=false, dragging=null, pressed=null, preview=null;
-  let frame=0, cacheKey='', scaleHint=1, removalNote='', undo=[], redo=[], gestureEdit=null;
+  let frame=0, scaleHint=1, removalNote='', undo=[], redo=[], gestureEdit=null;
   const cursor=new Map();
   const camera={x:0,y:0,zoom:1};
   const roadName=city=>city?.name??'Map point';
@@ -174,24 +409,10 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     return places().find(t=>t.id===p?.city);
   }
 
-  function cityRoads(includeDraft=true) {
-    const valley=getValley(), rows=[];
-    for(const city of valley.towns)for(const road of ContourTown.openRoads(valley,city)){
-      const key=roadKey(city,road);
-      if(!valley.transport.removedRoads.includes(key)&&
-        (!includeDraft||!draft.deleted.includes(key)))rows.push({key,road,city});
-    }
-    return rows;
+  function cityRoads(includeDraft=true){
+    return cityRoadRows(getValley()).filter(row=>!includeDraft||!draft.deleted.includes(row.key));
   }
-
-  function houses() {
-    const valley=getValley(), rows=[];
-    for(const city of valley.towns)for(const lot of city.lots){
-      const key=lotKey(city,lot);
-      if(city.built.has(lot.id)&&!valley.transport.removedLots.includes(key))rows.push({...lot,key});
-    }
-    return rows;
-  }
+  function houses(){return builtLots(getValley());}
 
   function roadNear(p, limit=Infinity, cityId){
     let best={distance:limit};
@@ -390,12 +611,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     station.tie=access?.tie??null;
     station.driveway=access?.points;
   }
-  const protectedRoad=key=>{
-    const valley=getValley();
-    return (valley.transport.stationAccesses??[]).some(access=>access.tie.key===key)||
-      valley.builtStations.some(s=>s.tie?.key===key)||(valley.transport.localRoutes??[]).some(route=>route.roadKeys?.includes(key)??key.startsWith(route.city+':'))||
-      valley.transport.routes.some(route=>route.roadKeys?.includes(key));
-  };
+  const protectedRoadKey=key=>protectedRoad(getValley(),key);
   const conflicts=s=>s&&!s.shared?cityRoads().filter(row=>stationRoadConflict(s,row.road.nodes)):[];
   const impactedByStation=(lot,s)=>hitsStation(lot,s,lot.radius??.33)||
       s.tie&&nearest(lot,s.driveway??[along(s,s.nx,s.ny,STATION_HALF_DEPTH),s.tie]).distance<(lot.radius??.33)+ROAD_HALF_WIDTH;
@@ -430,7 +646,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     if(s.tie&&!s.driveway?.length&&distance(s,s.tie)<.77)return 'Leave room between the station and the street.';
     if(s.tie&&!s.driveway?.length&&(!onLand({x:lerp(s.x,s.tie.x,.5),y:lerp(s.y,s.tie.y,.5)})||
       (distance(s,s.tie)-STATION_HALF_DEPTH)>0&&Math.abs(s.z-s.tie.z)*heightScale/((distance(s,s.tie)-STATION_HALF_DEPTH)*WORLD_METRES)*100>12))return 'Find a less steep entrance to the town street.';
-    if(blocking.length)return blocking.some(row=>protectedRoad(row.key))
+    if(blocking.length)return blocking.some(row=>protectedRoadKey(row.key))
       ?'A conflicting street serves a built station. Move this station.'
       :'Mark the highlighted streets for removal or move the station.';
     if(getValley().builtStations.some(other=>distance(other,s)<1.65)||
@@ -795,12 +1011,9 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
   const fitScale=()=>Math.min(map.clientWidth/(bounds.east-bounds.west+7),map.clientHeight/(bounds.south-bounds.north+7));
   const screen=p=>({x:map.clientWidth/2+(p.x-camera.x)*scaleHint,y:map.clientHeight/2+(p.y-camera.y)*scaleHint});
   const world=p=>({x:camera.x+(p.x-map.clientWidth/2)/scaleHint,y:camera.y+(p.y-map.clientHeight/2)/scaleHint});
-  function position(e,canvas=map){const r=canvas.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};}
+  const position=(e,canvas=map)=>pointerAt(e,canvas);
   function focus(x,y,zoom){camera.x=x;camera.y=y;camera.zoom=zoom;request();}
-  function pathTo(context,points){
-    context.beginPath();
-    points.forEach((p,i)=>{const q=screen(p);if(i)context.lineTo(q.x,q.y);else context.moveTo(q.x,q.y);});
-  }
+  function pathTo(context,points){tracePath(context,points,screen);}
   function line(points,tint,width){
     if(!points.length)return;
     pathTo(ctx,points);ctx.strokeStyle=tint;ctx.lineWidth=width;ctx.stroke();
@@ -817,54 +1030,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     ctx.strokeStyle='#fff9e5';ctx.strokeText(text,q.x,q.y);ctx.fillStyle=tint;ctx.fillText(text,q.x,q.y);
   }
   function drawTerrain(){
-    const width=map.clientWidth,height=map.clientHeight,valley=getValley();
-    const key=[camera.x,camera.y,camera.zoom,width,height,valley.region,valley.seed].join('/');
-    if(key!==cacheKey){
-      cacheKey=key;terrainCanvas.width=width;terrainCanvas.height=height;
-      terrainCtx.fillStyle='#f0ead9';terrainCtx.fillRect(0,0,width,height);
-      const stepSize=step===1||step===2?.5:Math.max(.95,2.8/scaleHint);
-      const min=world({x:0,y:0}),max=world({x:width,y:height});
-      const startX=Math.max(bounds.west,Math.floor(min.x/stepSize)*stepSize);
-      const startY=Math.max(bounds.north,Math.floor(min.y/stepSize)*stepSize);
-      for(let y=startY;y<Math.min(max.y,bounds.south);y+=stepSize)for(let x=startX;x<Math.min(max.x,bounds.east);x+=stepSize){
-        const midX=x+stepSize*.5,midY=y+stepSize*.5;
-        const a=screen({x,y}),z=valley.ground(midX,midY);
-        const zone=valley.biome?.(midX,midY);
-        const hue=zone==='western'?34:zone==='swamp'?96:76;
-        terrainCtx.fillStyle='hsl('+Math.round(hue-z*3)+' '+(zone==='western'?39:25)+'% '+Math.round(73-z*7)+'%)';
-        terrainCtx.fillRect(a.x,a.y,stepSize*scaleHint+.5,stepSize*scaleHint+.5);
-        terrainCtx.strokeStyle='#41594247';terrainCtx.lineWidth=1;terrainCtx.beginPath();
-        if(valley.ground(midX+stepSize,midY)<z){terrainCtx.moveTo(a.x+stepSize*scaleHint,a.y);terrainCtx.lineTo(a.x+stepSize*scaleHint,a.y+stepSize*scaleHint);}
-        if(valley.ground(midX,midY+stepSize)<z){terrainCtx.moveTo(a.x,a.y+stepSize*scaleHint);terrainCtx.lineTo(a.x+stepSize*scaleHint,a.y+stepSize*scaleHint);}
-        terrainCtx.stroke();
-      }
-      const segments=Math.ceil((bounds.south-bounds.north)/.55);
-      const waterways=[];
-      for(let i=0;i<=segments;i++){
-        const y=lerp(bounds.north,bounds.south,i/segments);
-        const channels=valley.channels?.(y)??[[valley.riverX(y),valley.riverWidth(y),'valley']];
-        channels.forEach(([x,w,zone],index)=>{
-          const channel=waterways[index]??={left:[],right:[],zone};
-          channel.left.push({x:x-w,y});channel.right.push({x:x+w,y});
-        });
-      }
-      for(const {left,right,zone} of waterways){
-        pathTo(terrainCtx,[...left,...right.reverse()]);terrainCtx.closePath();
-        terrainCtx.fillStyle=zone==='swamp'?'#78958a':'#78aaa9';terrainCtx.fill();
-      }
-      if(step===1||step===2){
-        terrainCtx.strokeStyle='#f6f2dd80';terrainCtx.lineWidth=1;terrainCtx.beginPath();
-        const grid=scaleHint>46?.25:1;
-        for(let x=Math.ceil(min.x/grid)*grid;x<max.x;x+=grid){
-          const q=screen({x,y:min.y});terrainCtx.moveTo(q.x,0);terrainCtx.lineTo(q.x,height);
-        }
-        for(let y=Math.ceil(min.y/grid)*grid;y<max.y;y+=grid){
-          const q=screen({x:min.x,y});terrainCtx.moveTo(0,q.y);terrainCtx.lineTo(width,q.y);
-        }
-        terrainCtx.stroke();
-      }
-    }
-    ctx.drawImage(terrainCanvas,0,0);
+    renderTerrain({ctx,width:map.clientWidth,height:map.clientHeight,valley:getValley(),bounds,view:camera,scaleHint,screen,world,detail:step===1||step===2});
   }
 
   function arrow(from,to,label){
@@ -880,19 +1046,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     mapText(world({x:tx,y:ty}),label,'#62458f');
   }
 
-  const stationFaceCache=new Map();
-  function drawStationAsset(station,apron=false){
-    if(!stationFaces){area(stationFootprint(station),'#68766d');return;}
-    const key=JSON.stringify([station.x,station.y,station.z,station.nx,station.ny,station.place,station.millBay,station.bayUse,apron]);
-    if(!stationFaceCache.has(key)){
-      if(stationFaceCache.size>=96)stationFaceCache.delete(stationFaceCache.keys().next().value);
-      const faces=stationFaces(station,apron),depth=face=>face.points.reduce((sum,p)=>sum+p[2]+(p[1]-station.y)*.10,0)/face.points.length;
-      stationFaceCache.set(key,faces.sort((a,b)=>depth(a)-depth(b)));
-    }
-    for(const {points,color} of stationFaceCache.get(key)){
-      area(points.map(([x,y,z])=>({x:x+(z-station.z)*.28,y:y-(z-station.z)*.46})),color);
-    }
-  }
+  const drawStationAsset=createStationPainter(stationFaces,area);
   function drawGates(station,side,local,tie,invalid=false){
     for(const item of availableGates(station,local)){
       const {gate}=item,point=along(gate,gate.dx,gate.dy,.18);
@@ -981,25 +1135,10 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     const lost=new Set(preview?.lots.map(l=>l.key)??[]);
     const served=new Set(current?valley.market.catchment(current).map(l=>current.place+':'+l.id):[]);
     const roadConflicts=new Set(conflicts(current).map(r=>r.key));
-    for(const lot of houses()){
-      const q=screen(lot), hit=lost.has(lot.key)||current&&!current.shared&&impactedByStation(lot,current);
-      const size=Math.max(2,(lot.w??.50)*scaleHint);
-      if(q.x<-20||q.y<-20||q.x>w+20||q.y>h+20)continue;
-      ctx.save();ctx.translate(q.x,q.y);ctx.rotate(lot.angle??0);
-      ctx.fillStyle=hit?'#b9503c':served.has(lot.key)?'#3e885f':'#a97254';ctx.fillRect(-size/2,-size/2,size,size*.9);ctx.restore();
-    }
-    for(const row of cityRoads(false)){
-      const removed=draft.deleted.includes(row.key);
-      const conflict=roadConflicts.has(row.key);
-      if(removed)ctx.setLineDash([5,4]);
-      line(row.road.nodes,removed?'#a6493e':conflict?'#ffe2a9':'#f2dfad',Math.max(conflict?7:2,.43*scaleHint));
-      if(!removed)line(row.road.nodes,conflict?'#b4483b':'#56615e',Math.max(conflict?4:1.25,.315*scaleHint));
-      ctx.setLineDash([]);
-    }
-    for(const [,route] of ContourTown.roadEntries(valley.transport))for(const path of ContourTown.roadSections(route)){
-      line(path,'#fff0be',Math.max(2,.48*scaleHint));
-      line(path,'#234c5b',Math.max(1.5,.34*scaleHint));
-    }
+    const lots=houses();
+    for(const lot of lots)if(current&&!current.shared&&impactedByStation(lot,current))lost.add(lot.key);
+    drawTownMap({ctx,screen,line,scaleHint,w,h,valley,lots,roads:cityRoads(false),lost,served,
+      roadConflicts,deleted:new Set(draft.deleted)});
     for(const site of [...industries(),...(valley.publicDepots??[])]){
       const yard=(x,y)=>({x:site.x+x,y:site.y+y});
       area([yard(-site.halfWidth,-site.halfDepth),yard(site.halfWidth,-site.halfDepth),
@@ -1101,19 +1240,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
 
   function drawProfile(){
     const c=section.getContext('2d'),g=profileScale(),ratio=Math.min(window.devicePixelRatio||1,2);
-    if(section.width!==Math.round(g.w*ratio)||section.height!==Math.round(g.h*ratio)){section.width=Math.round(g.w*ratio);section.height=Math.round(g.h*ratio);}
-    c.setTransform(ratio,0,0,ratio,0,0);c.clearRect(0,0,g.w,g.h);
-    const y=z=>g.bottom-(z-g.min)/(g.max-g.min)*(g.bottom-g.top);
-    const x=f=>lerp(g.left,g.right,f);
-    c.font='11px system-ui';c.fillStyle='#44594e';c.strokeStyle='#cbd5c7';c.lineWidth=1;
-    for(let i=0;i<4;i++){
-      const z=lerp(g.min,g.max,i/3),p=y(z);
-      c.beginPath();c.moveTo(g.left,p);c.lineTo(g.right,p);c.stroke();
-      c.fillText(Math.round(z*heightScale)+' m',3,p+3);
-    }
-    const points=preview.path;
-    c.beginPath();points.forEach((p,i)=>{const f=p.d/preview.length;if(i)c.lineTo(x(f),y(p.ground));else c.moveTo(x(f),y(p.ground));});
-    c.strokeStyle='#8c7f55';c.lineWidth=1.6;c.stroke();
+    const {x,y}=drawProfileBase({canvas:section,c,g,ratio,path:preview.path,length:preview.length,heightScale});
     c.setLineDash([3,4]);c.beginPath();
     c.moveTo(x(0),y(preview.levels[0].z));
     preview.design.curves.forEach(p=>c.lineTo(x(p.d/preview.length),y(p.z)));
@@ -1130,24 +1257,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     c.textAlign='right';c.fillText((preview.length*WORLD_METRES/1000).toFixed(2)+' km',g.right,g.h-5);c.textAlign='left';
   }
   function drawVerticalLine(context,x,y,start,end,samples,width){
-    const {design}=preview;
-    const distances=Array.from({length:samples+1},(_,i)=>lerp(start,end,i/samples));
-    for(const curve of design.curves)for(const d of [curve.d-curve.half,curve.d,curve.d+curve.half]){
-      if(d>start&&d<end)distances.push(d);
-    }
-    distances.sort((a,b)=>a-b);
-    context.lineWidth=width;
-    context.lineCap='round';
-    for(let i=1;i<distances.length;i++){
-      const a=distances[i-1],b=distances[i],middle=(a+b)/2;
-      if(b-a<1e-8)continue;
-      const low=design.elevation(a),high=design.elevation(b);
-      const rounded=design.curves.some(curve=>Math.abs(middle-curve.d)<curve.half);
-      const grade=Math.abs(high-low)*heightScale/((b-a)*WORLD_METRES)*100;
-      context.strokeStyle=grade>MAX_GRADE+.001?'#aa4733':rounded?'#674e97':'#1f6c79';
-      context.beginPath();
-      context.moveTo(x(a),y(low));context.lineTo(x(b),y(high));context.stroke();
-    }
+    drawProfileCurve(context,x,y,start,end,samples,width,preview.design,heightScale,MAX_GRADE);
   }
 
   function drawProfileLens(){
@@ -1278,7 +1388,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     const blocking=conflicts(station);
     $('rbMarkConflicts').hidden=!blocking.length;
     if(blocking.length)$('rbSiteOptions').open=true;
-    $('rbMarkConflicts').disabled=blocking.every(row=>protectedRoad(row.key));
+    $('rbMarkConflicts').disabled=blocking.every(row=>protectedRoadKey(row.key));
     $('rbDelete').setAttribute('aria-pressed',String(deleteMode));
     $('rbRemoveBend').disabled=selected<0;
     let help='',issue='';
@@ -1390,7 +1500,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
 
   function setStep(next){
     if(next!==step){profileOpen=false;$('rbSiteOptions').open=false;}
-    step=next;deleteMode=false;removalNote='';selected=-1;cacheKey='';draft.choosingAccess=false;
+    step=next;deleteMode=false;removalNote='';selected=-1;draft.choosingAccess=false;
     if(step===0)focus(0,0,1);
     else if(step===1||step===2){
       const s=draft.picks[step-1];
@@ -1545,7 +1655,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
       }
       if(deleteMode){
         const hit=roadNear(p,Math.max(.24,15/scaleHint));
-        if(hit&&protectedRoad(hit.key)){
+        if(hit&&protectedRoadKey(hit.key)){
           removalNote='This street serves a station on a built route.';refresh();
         }else if(hit)edit(()=>{removalNote='';draft.deleted.push(hit.key);reviseTies();});
 
@@ -1582,7 +1692,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     else if(!stationEdit)try{localStorage.removeItem(saveKey());}catch{}
     if(!stationEdit)$('newRoute').textContent=keep?'Resume route':'New route';
     if(history.state?.roadEditor)history.back();
-    draft=null;stationEdit=null;preview=null;cursor.clear();undo=[];redo=[];gestureEdit=null;profileDrag=null;lens.hidden=true;
+    draft=null;stationEdit=null;preview=null;cursor.clear();undo=[];redo=[];gestureEdit=null;profileDrag=null;resetProfileGesture();lens.hidden=true;
     root.hidden=true;
     $('app').inert=false;$('newRoute').focus();
     finish?.();
@@ -1649,41 +1759,15 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
   map.addEventListener('wheel',e=>{if(!draft)return;e.preventDefault();zoom(Math.exp(clamp(-e.deltaY*.0025,-.35,.35)),position(e));},{passive:false});
 
   let profileDrag=null;
-  section.addEventListener('pointerdown',e=>{
-    if(!preview?.design||step!==3||e.button!==0)return;
-    const p=position(e,section),g=profileScale();
-    const approach=preview.design.approach, run=preview.length-2*approach;
-    const f=(x)=>((x-g.left)/(g.right-g.left)*preview.length-approach)/run;
-    const z=(y)=>lerp(g.min,g.max,clamp((g.bottom-y)/(g.bottom-g.top),-.2,1.2));
-    const indexed=alignment().vips.findIndex(v=>Math.hypot(
-      g.left+(approach+v.f*run)/preview.length*(g.right-g.left)-p.x,
-      g.bottom-(v.z-g.min)/(g.max-g.min)*(g.bottom-g.top)-p.y)<17);
-    const before=snapshot();
-    if(indexed<0){
-      if(f(p.x)<.025||f(p.x)>.975||alignment().vips.some(v=>Math.abs(v.f-f(p.x))<.025))return;
-      const newPoint={f:f(p.x),z:z(p.y),radius:MIN_RADIUS};
-      alignment().vips.push(newPoint);
-      alignment().vips.sort((a,b)=>a.f-b.f);
-      alignment().vip=alignment().vips.indexOf(newPoint);
-    }else alignment().vip=indexed;
-    const vip=alignment().vips[alignment().vip];
-    profileDrag={id:e.pointerId,index:alignment().vip,before,scale:g,pointer:p,f,z,
-      offsetF:vip.f-f(p.x),offsetZ:vip.z-z(p.y)};section.setPointerCapture(e.pointerId);
-    refresh();
-  });
-  section.addEventListener('pointermove',e=>{
-    if(profileDrag?.id!==e.pointerId)return;
-    const p=position(e,section),i=profileDrag.index,v=alignment().vips[i];
-    profileDrag.pointer=p;
-    v.f=clamp(profileDrag.f(p.x)+profileDrag.offsetF,(alignment().vips[i-1]?.f??0)+.025,(alignment().vips[i+1]?.f??1)-.025);
-    v.z=profileDrag.z(p.y)+profileDrag.offsetZ;
-    refresh();
-  });
-  for(const kind of ['pointerup','pointercancel','lostpointercapture'])section.addEventListener(kind,e=>{
-    if(profileDrag?.id!==e.pointerId)return;
-    const {before}=profileDrag;
-    profileDrag=null;lens.hidden=true;
-    record(before);request();
+  const resetProfileGesture=bindProfileEditor(section,{
+    editable:()=>step===3&&Boolean(preview?.design),
+    model:()=>preview,
+    bounds:profileScale,
+    values:()=>alignment().vips,
+    before:snapshot,
+    defaultRadius:MIN_RADIUS,
+    drag:gesture=>{profileDrag=gesture;alignment().vip=gesture.index;refresh();},
+    finish:gesture=>{profileDrag=null;lens.hidden=true;record(gesture.before);request();},
   });
 
   $('rbNext').onclick=()=>{
@@ -1723,7 +1807,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
   });
   $('rbDelete').onclick=()=>{deleteMode=!deleteMode;removalNote='';refresh();};
   $('rbMarkConflicts').onclick=()=>edit(()=>{
-    for(const row of conflicts(draft.stations[step-1]))if(!protectedRoad(row.key))draft.deleted.push(row.key);
+    for(const row of conflicts(draft.stations[step-1]))if(!protectedRoadKey(row.key))draft.deleted.push(row.key);
     reviseTies();
   });
   $('rbUndo').onclick=()=>restore(undo,redo);
@@ -2123,32 +2207,12 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
   }
 
   function updateEndpointPicker(){
-    const box=$('rbCity'),[origin,destination]=draft.picks,market=getValley().market;
-    const select=document.createElement('select');
-    select.setAttribute('aria-label',origin&&!destination?'Choose destination':'Choose origin');
-    const initial=new Option(origin&&!destination?'Choose destination…':'Choose origin…','');
-    initial.disabled=true;select.add(initial);
-    for(const [zone,label] of Object.entries(ContourRegion.names)){
-      const group=document.createElement('optgroup');group.label=label;
-      for(const place of places().filter(p=>p.biome===zone)){
-        if(origin&&!destination&&!market.trade(cityFor(origin),place))continue;
-        const cargo=place.output?' · '+ContourRegion.goods[place.output][0]:place.depot?' · Trading depot':'';
-        group.append(new Option(place.name+cargo,place.id));
-      }
-      if(group.children.length)select.append(group);
-    }
-    select.selectedIndex=0;
-    select.onchange=()=>{const site=places().find(p=>p.id===select.value);if(site)selectEndpoint(site,site);};
-    box.replaceChildren(select);
+    const [first,second]=draft.picks;
+    $('rbCity').replaceChildren(...endpointControls(getValley(),places(),first&&cityFor(first),second&&cityFor(second),site=>selectEndpoint(site,site)));
   }
-  $('rbCity').onclick=e=>{
-    const id=e.target.closest('button')?.dataset.city;
-    const city=places().find(c=>c.id===id);
-    if(city)selectEndpoint(city,city);
-  };
   window.addEventListener('popstate',()=>{if(!root.hidden)close(true);});
   root.addEventListener('keydown',e=>{if(e.key==='Escape')close(true);});
-  new ResizeObserver(()=>{cacheKey='';request();}).observe(map);
+  new ResizeObserver(request).observe(map);
 
   return {
     designRailSection(from,to,leave,enter,edits){
@@ -2157,7 +2221,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     },
     openStation(base,bayId){
       $('rbBayOptions').open=false;
-      begin();roadGraphCache=null;gatesCache=null;stationFaceCache.clear();preview=null;step=1;deleteMode=false;
+      begin();roadGraphCache=null;gatesCache=null;drawStationAsset.clear();preview=null;step=1;deleteMode=false;
       const saved=getValley().transport.stationLayouts?.[bayKey(base)];
       const original=saved??{bays:[{...base,id:'1',bayUse:'both'}],nextId:2};
       stationEdit={base,original,layout:structuredClone(original),services:stationServices(base),assignments:{},accesses:[],
@@ -2169,7 +2233,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     },
     open(){
       begin();
-      roadGraphCache=null;gatesCache=null;sectionCache.clear();stationFaceCache.clear();
+      roadGraphCache=null;gatesCache=null;sectionCache.clear();drawStationAsset.clear();
       draft={picks:[],stations:[null,null],handles:[],vips:[],deleted:[],vip:-1};
       undo=[];redo=[];sliderBefore=null;
       let saved=null;try{saved=JSON.parse(localStorage.getItem(saveKey()));}catch{}
@@ -2184,9 +2248,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
         }else if(draft.roadMode==='new'||draft.roadMode==='mixed'&&draft.joins?.length<2)delete draft.roadMode;
       }
       history.pushState({roadEditor:true},'','');
-      if(!getValley().region)$('rbCity').replaceChildren(...places().map(city=>{
-        const button=document.createElement('button');button.textContent=city.name;button.dataset.city=city.id;return button;
-      }));
+      if(!getValley().region)updateEndpointPicker();
       $('app').inert=true;root.hidden=false;setStep(saved?.step||0);if(saved?.camera){Object.assign(camera,saved.camera);selected=saved.selected;refresh();}$('rbClose').focus();
     }
   };
