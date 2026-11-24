@@ -36,6 +36,74 @@
       length:sum(stock,'length'),resistance:sum(stock,'resistance'),brake:sum(stock,'brake'),carCount:stock.length};
   }
   const crossingCache=new WeakMap();
+  const nodeId=(trackId,index)=>'junction:'+JSON.stringify([trackId,index]);
+  function trackTangent(track,i){
+    if(i===0&&track.startTangent)return track.startTangent;
+    if(i===track.points.length-1&&track.endTangent)return track.endTangent;
+    const a=track.points[Math.max(0,i-1)],b=track.points[Math.min(track.points.length-1,i+1)];
+    const span=Math.hypot(b.x-a.x,b.y-a.y)||1;
+    return {x:(b.x-a.x)/span,y:(b.y-a.y)/span};
+  }
+  function planSplits(tracks={},cuts=[]){
+    if(!Array.isArray(cuts))throw new Error('Review the proposed track junctions.');
+    const groups=new Map();
+    for(const cut of cuts){
+      const {trackId,index}=cut??{};
+      const track=Object.hasOwn(tracks,trackId)&&tracks[trackId];
+      if(!track||!Number.isInteger(index)||index<=0||index>=track.points.length-1){
+        throw new Error('A proposed junction is no longer on its original track section.');
+      }
+      if(!groups.has(trackId))groups.set(trackId,new Set());
+      groups.get(trackId).add(index);
+    }
+    const replacements=new Map(),next={...tracks};
+    for(const [id,track] of Object.entries(tracks)){
+      if(!groups.has(id))continue;
+      const indices=[0,...[...groups.get(id)].sort((a,b)=>a-b),track.points.length-1];
+      const nodes=[track.from,...indices.slice(1,-1).map(index=>nodeId(id,index)),track.to];
+      const distances=[0];
+      for(let i=1;i<track.points.length;i++){
+        const a=track.points[i-1],b=track.points[i];
+        distances.push(distances[i-1]+Math.hypot(b.x-a.x,b.y-a.y));
+      }
+      const pieces=indices.slice(1).map((last,i)=>{
+        const first=indices[i],start=distances[first],end=distances[last];
+        const pieceId='rail-split:'+JSON.stringify([id,first,last]);
+        if(Object.hasOwn(next,pieceId)||end<=start)throw new Error('The proposed junction cannot divide this track section.');
+        const piece={...track,id:pieceId,from:nodes[i],to:nodes[i+1],points:track.points.slice(first,last+1),
+          crossingCorridor:track.crossingCorridor??id,
+          startTangent:first?trackTangent(track,first):track.startTangent,
+          endTangent:last<track.points.length-1?trackTangent(track,last):track.endTangent};
+        if(track.crossings){
+          piece.crossings=track.crossings.filter(({d})=>d>=start&&(d<end||i===indices.length-2&&d<=end))
+            .map(entry=>{
+              const record={...entry};
+              for(const key of ['d','left','right'])if(Number.isFinite(record[key]))record[key]-=start;
+              return record;
+            });
+        }
+        return piece;
+      });
+      delete next[id];
+      for(const piece of pieces)next[piece.id]=piece;
+      replacements.set(id,pieces);
+    }
+    return {tracks:next,replacements};
+  }
+  function rewriteRoute(route,replacements){
+    if(!route.trackIds?.some(id=>replacements.has(id)))return route;
+    const trackIds=[],trackDirections=[];
+    for(const [i,id] of route.trackIds.entries()){
+      const direction=route.trackDirections?.[i]===-1?-1:1;
+      const pieces=replacements.get(id);
+      if(!pieces)trackIds.push(id);
+      else trackIds.push(...(direction===1?pieces:[...pieces].reverse()).map(piece=>piece.id));
+      trackDirections.push(...Array(pieces?.length??1).fill(direction));
+    }
+    return {...route,trackIds,trackDirections};
+  }
+  window.ContourTrackSplit={plan:planSplits,nodeId,rewriteRoute};
+
   function crossingResources(transport){
     const tracks=Object.values(transport?.railTracks??{});
     if(!transport||tracks.length<2)return new Map();
@@ -194,17 +262,13 @@
     if(!profile||profile.points.length<2)return {lines:[],profile};
     const {points,distances,length}=profile;
     const lanes=profile.tracks===2?[-1,1]:[0];
-    const tangent=points.map((p,i)=>{
-      const a=points[Math.max(0,i-1)],b=points[Math.min(i+1,points.length-1)];
-      const span=Math.hypot(b.x-a.x,b.y-a.y)||1;
-      return {x:(a.y-b.y)/span,y:(b.x-a.x)/span};
-    });
+    const tangents=points.map((_,i)=>trackTangent(track,i));
     const line=(lane,start,end,from=0,to=length)=>({
       points:points.flatMap((p,i)=>{
         const d=distances[i];
         if(d<from||d>to)return [];
         const offset=trackLateral(profile,d,lane,start,end);
-        return [{...p,x:p.x+tangent[i].x*offset,y:p.y+tangent[i].y*offset}];
+        return [{...p,x:p.x-tangents[i].y*offset,y:p.y+tangents[i].x*offset}];
       }),
     });
     const lines=lanes.map(lane=>line(lane));
@@ -455,5 +519,5 @@
     return {x:a.x+(b.x-a.x)*f-dy*lateral,y:a.y+(b.y-a.y)*f+dx*lateral,z:a.z+(b.z-a.z)*f,
       tunnel:Boolean((f<.5?a:b).tunnel),yaw,angle:yaw,pitch:Math.atan2((b.z-a.z)*direction,span),direction};
   }
-  window.ContourRail={locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,runningLane,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trainSpan};
+  window.ContourRail={locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,runningLane,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trackTangent,trainSpan};
 })();

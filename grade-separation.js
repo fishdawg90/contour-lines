@@ -33,7 +33,7 @@
       for(const track of Object.values(transport.railTracks??{})){
         if(skip(track.id))continue;
         const lines=window.ContourRail?.trackLines?.(track,transport).lines??[track];
-        for(const line of lines)paths.push({id:'rail:'+track.id,points:line.points,name:'Rail crossing',width:.18});
+        for(const line of lines)paths.push({id:'rail:'+(track.crossingCorridor??track.id),points:line.points,name:'Rail crossing',width:.18});
       }
       return paths;
     }

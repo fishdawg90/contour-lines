@@ -2384,9 +2384,9 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
   new ResizeObserver(request).observe(map);
 
   return {
-    designRailSection(from,to,leave,enter,edits,excluded){
+    designRailSection(from,to,leave,enter,edits,excluded,startGrade=0,endGrade=0){
       const stationApproach=s=>s.kind?(s.platformLength??2.4)*(s.terminal?1:.5):0;
-      return designSection(from,to,leave,enter,edits,0,0,[stationApproach(from),stationApproach(to)],excluded);
+      return designSection(from,to,leave,enter,edits,startGrade,endGrade,[stationApproach(from),stationApproach(to)],excluded);
     },
     openStation(base,bayId){
       $('rbBayOptions').open=false;

@@ -33,3 +33,19 @@
 #railBuilder .rl-rotate button{display:grid;place-items:center;width:44px;height:40px;padding:0;border:0;border-radius:7px;background:#344139;color:var(--pale);font:650 24px/1 system-ui}
 #railBuilder .rl-rotate button:focus-visible{outline:2px solid var(--mint)}
 #railBuilder .rl-platform-options summary{min-height:40px;align-content:center;padding:6px 10px;border:1px solid var(--edge);border-radius:8px;background:#35433b;color:var(--pale);font:500 14px/1.25 system-ui;cursor:pointer}
+#railBuilder .rl-schematic{position:absolute;z-index:2;right:8px;top:8px;width:max-content;max-width:min(220px,54%);max-height:calc(100% - 16px);overflow:auto;border:1px solid var(--edge);border-radius:9px;background:var(--coal);color:var(--pale);box-shadow:0 2px 7px #17211c40;font:500 12px/1.25 system-ui}
+#railBuilder .rl-schematic summary{padding:9px 12px;cursor:pointer;font-weight:650}
+#railBuilder .rl-itinerary{padding:0 5px 5px;min-width:156px}
+#railBuilder :is(.rl-diagram-leg,.rl-diagram-stop){display:grid;grid-template-columns:22px 1fr auto;align-items:center;gap:5px;width:100%;padding:0 5px;text-align:left}
+#railBuilder .rl-diagram-stop{min-height:25px}
+#railBuilder .rl-diagram-stop b{justify-self:center;border-radius:4px;background:#cedecc;color:#26372d;width:18px;text-align:center}
+#railBuilder .rl-diagram-stop strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#railBuilder .rl-diagram-leg{min-height:36px;border:0;border-radius:5px;background:transparent;color:inherit;font:inherit;cursor:pointer;--line:#ffde7e}
+#railBuilder .rl-diagram-leg[data-built=true]{--line:#6de4d2}
+#railBuilder .rl-diagram-leg[aria-pressed=true]{background:#384a40}
+#railBuilder .rl-diagram-leg:disabled{opacity:1;cursor:default}
+#railBuilder .rl-diagram-rails{align-self:stretch;justify-self:center;width:0;border-left:3px solid var(--line)}
+#railBuilder .rl-diagram-rails[data-double=true]{width:9px;border-right:3px solid var(--line)}
+#railBuilder .rl-diagram-rails[data-lane=left]{border-right-color:#738279}
+#railBuilder .rl-diagram-rails[data-lane=right]{border-left-color:#738279}
+#railBuilder .rl-itinerary small{color:#c5d0c7;font-variant-numeric:tabular-nums;font-size:11px}

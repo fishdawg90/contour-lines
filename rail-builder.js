@@ -36,22 +36,29 @@ function ends(path) {
 }
 
 // Track connectivity is explicit. Lines crossing in plan do not introduce a node.
-function findCorridor(tracks,stations,from,to,via) {
+function findCorridor(tracks,stations,from,to,blockedNodes=new Set(),blockedTracks=new Set()) {
   const distances=new Map(),pending=new Map();
-  const initial={node:from,steps:[],used:!via,cost:0};
-  pending.set(from+'|'+initial.used,initial);
+  const approaches=new Map();
+  for(const track of Object.values(tracks)){
+    if(blockedTracks.has(track.id))continue;
+    for(const node of [track.from,track.to]){
+      if(!approaches.has(node))approaches.set(node,[]);
+      approaches.get(node).push(track);
+    }
+  }
+  pending.set(JSON.stringify([from]),{node:from,steps:[],cost:0});
   while(pending.size){
     const [key,current]=[...pending].reduce((a,b)=>a[1].cost<=b[1].cost?a:b);
     pending.delete(key);
-    if(current.node===to&&current.used)return current.steps;
+    if(current.node===to)return current.steps;
     distances.set(key,current.cost);
     if(current.node!==from&&stations[current.node]?.terminal)continue;
-    for(const track of Object.values(tracks)){
-      if(![track.from,track.to].includes(current.node)||current.steps.some(p=>p.track.id===track.id))continue;
+    for(const track of approaches.get(current.node)??[]){
       const leg=directed(track,current.node),previous=current.steps.at(-1);
+      if(leg.to===from||blockedNodes.has(leg.to)||current.steps.some(p=>p.to===leg.to))continue;
       if(previous&&dot(ends(previous.points)[1],ends(leg.points)[0])>-.54)continue;
-      const next={node:leg.to,steps:[...current.steps,leg],used:current.used||track.id===via,cost:current.cost+length(leg.points)};
-      const nextKey=next.node+'|'+next.used+'|'+track.id;
+      const next={node:leg.to,steps:[...current.steps,leg],cost:current.cost+length(leg.points)};
+      const nextKey=JSON.stringify([next.node,track.id]);
       if(next.cost>=(distances.get(nextKey)??Infinity)||next.cost>=(pending.get(nextKey)?.cost??Infinity))continue;
       pending.set(nextKey,next);
     }
@@ -71,6 +78,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
   root.innerHTML=`
     <div class="rb-header rl-header"><span class="rl-step"></span><h2 id="rlTitle">Rail route</h2><button data-action="undo" aria-label="Undo" title="Undo">↶</button><button data-action="redo" aria-label="Redo" title="Redo">↷</button><button data-action="close" aria-label="Close editor" title="Close editor">×</button></div>
     <div class="rb-map-area rl-map"><div class="editorZoom"><button data-action="minus" aria-label="Zoom out">−</button><button data-action="plus" aria-label="Zoom in">+</button></div><canvas aria-label="Rail construction map"></canvas>
+      <details class="rl-schematic" hidden><summary>Track diagram</summary><div class="rl-itinerary"></div></details>
       <div class="rl-rotate" role="group" aria-label="Turn platform" hidden>
         <button data-action="turnLeft" aria-label="Rotate station counterclockwise" title="Rotate left">⟲</button>
         <button data-action="turnRight" aria-label="Rotate station clockwise" title="Rotate right">⟳</button>
@@ -89,6 +97,11 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
   const renderTerrain=shared.createTerrainPainter();
   let state,view,undo,redo,routeEdit,stationEdit,preview,issue='',pointer,profileDrag,activeLevel=-1,levelSnapshot,placement,crossingMarkers=[],selectedCrossing;
   const tracks=()=>getValley().transport.railTracks??{};
+  function knownTracks(){
+    if(!state?.trackCuts?.length)return tracks();
+    try{return window.ContourTrackSplit.plan(tracks(),state.trackCuts).tracks;}
+    catch{return tracks();}
+  }
   const stations=()=>getValley().transport.railStations??Object.fromEntries(
     getValley().transport.routes.filter(r=>r.mode==='rail').flatMap(r=>r.stations.map(s=>[s.id,s])));
   const places=()=>{
@@ -163,20 +176,20 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     if(blocking.some(row=>protectedRoad(row.key)))return 'A conflicting street serves a station or route. Move the platform.';
     return blocking.length?'Mark the highlighted streets for removal or move the platform.':'';
   }
-  function allNodes() {
+  function allNodes(known=knownTracks()) {
     const nodes=new Map(Object.values(stations()).map(s=>[s.id,s]));
-    for(const track of Object.values(tracks())){
+    for(const track of Object.values(known)){
       if(!nodes.has(track.from))nodes.set(track.from,{...track.points[0],id:track.from});
       if(!nodes.has(track.to))nodes.set(track.to,{...track.points.at(-1),id:track.to});
     }
     for(const station of state.stations??[])if(station)nodes.set(station.id,station);
     return nodes;
   }
-  function endpointHeading(from,to,ignored){
+  function endpointHeading(from,to,ignored,known,neighbor){
     if(from.kind){
       const tangent={x:-from.ny,y:from.nx};
       if(from.terminal&&from.facing)return from.facing;
-      const approaches=incident(from).filter(track=>track.id!==ignored);
+      const approaches=incident(from,known).filter(track=>track.id!==ignored);
       if(approaches.length===1){
         const existing=ends(directed(approaches[0],from.id).points)[0];
         return dot(tangent,existing)>0?{x:-tangent.x,y:-tangent.y}:tangent;
@@ -184,12 +197,22 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       const toward=heading(from,to);
       return dot(tangent,toward)>=0?tangent:{x:-tangent.x,y:-tangent.y};
     }
+    if(neighbor){
+      const {points}=directed(neighbor,from.id);
+      return heading(points[1],points[0]);
+    }
     return heading(from,to);
   }
-  function align(from,to,edits,excluded){
+  function align(from,to,edits,excluded,known,previous,next){
     const near=edits.handles[0]??to, far=edits.handles.at(-1)??from;
-    const leave=endpointHeading(from,near,edits.redraw),back=endpointHeading(to,far,edits.redraw);
-    return designSection(from,to,leave,{x:-back.x,y:-back.y},edits,excluded);
+    const leave=endpointHeading(from,near,edits.redraw,known,previous);
+    const back=endpointHeading(to,far,edits.redraw,known,next);
+    const grade=(node,track)=>{
+      if(node.kind||!track)return 0;
+      const [a,b]=directed(track,node.id).points;
+      return (b.z-a.z)/(distance(a,b)||1);
+    };
+    return designSection(from,to,leave,{x:-back.x,y:-back.y},edits,excluded,-grade(from,previous),grade(to,next));
   }
   function stationIssue(s,index,approachTracks){
     if(!s)return 'Choose a place and set a rail station on the map.';
@@ -243,10 +266,10 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     if(state.stations.some(s=>!s))return;
     const [from,to]=state.stations.map(s=>s.id);
     if(state.legs[0]?.from===from&&state.legs.at(-1)?.to===to)return;
-    state.legs=[newLeg(from,to,state.legTracks)];state.active=0;state.tool='shape';
+    setLegs([newLeg(from,to,state.legTracks)]);
   }
-  function incident(station){
-    return Object.values(tracks()).filter(t=>t.from===station.id||t.to===station.id);
+  function incident(station,known=tracks()){
+    return Object.values(known).filter(t=>t.from===station.id||t.to===station.id);
   }
   function terminalIssue(s){
     const approaches=incident(s).map(t=>ends(directed(t,s.id).points)[0]);
@@ -256,8 +279,8 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       return 'A service runs through this station. Keep it as a through station.';
     return '';
   }
-  function junctionIssue(node,leave,ignored){
-    const approaches=incident(node).filter(t=>t.id!==ignored).map(track=>ends(directed(track,node.id).points)[0]);
+  function junctionIssue(node,leave,ignored,known){
+    const approaches=incident(node,known).filter(t=>t.id!==ignored).map(track=>ends(directed(track,node.id).points)[0]);
     if(!approaches.length)return '';
     if(node.terminal)return 'Reuse the existing approach into this terminal or convert it to a through station.';
     if(node.kind&&approaches.some(dir=>dot(dir,leave)>.42))
@@ -266,11 +289,11 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     return '';
   }
   function routePreview(){
-    const nodes=allNodes(),known=tracks(),legs=[],included=new Set();
+    const known=knownTracks(),nodes=allNodes(known),legs=[],included=new Set();
     const excluded=new Set(state.stations.flatMap(s=>stationConflicts(s).map(row=>row.key))
       .filter(key=>roadsMarked().includes(key)&&!protectedRoad(key)));
     let error='',cost=0,newLength=0,reusedLength=0,maxGrade=0;
-    for(const draft of state.legs){
+    for(const [i,draft] of state.legs.entries()){
       const from=nodes.get(draft.from),to=nodes.get(draft.to);
       if(!from||!to){error='A selected track connection is unavailable.';break;}
       const existing=known[draft.trackId];
@@ -279,7 +302,8 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       }
       const stationRun=s=>s.kind?(s.platformLength??2.4)*(s.terminal?1:.5):0;
       if(!existing&&distance(from,to)<stationRun(from)+stationRun(to)+.35){error='Leave room between track connections.';break;}
-      const section=existing?null:align(from,to,draft,excluded);
+      const section=existing?null:align(from,to,draft,excluded,known,
+        known[state.legs[i-1]?.trackId],known[state.legs[i+1]?.trackId]);
       const prior=known[draft.redraw];
       const reversed=prior?.to===from.id;
       const track=existing?(draft.double?{...existing,tracks:2}:existing):{
@@ -307,7 +331,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
         continue;
       }
       const [out,incoming]=ends(leg.points);
-      error ||= junctionIssue(from,out,draft.redraw)||junctionIssue(to,incoming,draft.redraw)||section.issue;
+      error ||= junctionIssue(from,out,draft.redraw,known)||junctionIssue(to,incoming,draft.redraw,known)||section.issue;
       error ||= section.path.some(p=>!within(p))?'Keep the track within the map.':'';
       error ||= places().filter(p=>p.halfWidth&&p.halfDepth).some(p=>section.path.some(q=>
         Math.abs(q.x-p.x)<p.halfWidth+.12&&Math.abs(q.y-p.y)<p.halfDepth+.12))?'Curve the track around the industry buildings.':'';
@@ -334,39 +358,111 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
   }
   function setLegs(legs){
     state.legs=legs;
+    state.trackCuts=[];
     state.active=Math.max(0,legs.findIndex(leg=>!leg.trackId));
-    state.tool='shape';
+    setTool('shape');
     activeLevel=-1;
   }
-  function useCorridor(via){
-    const known=tracks(), built=stations();
-    const [start,end]=state.stations;
-    if(!start||!end)return;
-    const direct=findCorridor(known,built,start.id,end.id,via);
-    if(direct.length){
-      change(()=>setLegs(direct.map(({track,from,to})=>({trackId:track.id,from,to}))));
+  function setTool(tool){
+    state.tool=tool;
+    if(tool!=='reuse')state.reuseStart=null;
+    issue='';
+  }
+  const reusedDraft=({track,from,to})=>({trackId:track.id,from,to});
+  function useCorridor(){
+    const found=findCorridor(tracks(),stations(),...state.stations.map(s=>s.id));
+    if(found.length)change(()=>setLegs(found.map(reusedDraft)));
+    else showIssue('No continuous rail corridor connects these stations. Use Reuse track to add a stretch.');
+  }
+  function trackPick(p){
+    const limit=15/scale();
+    let best;
+    for(const track of Object.values(tracks())){
+      for(let i=1;i<track.points.length;i++){
+        const a=track.points[i-1],b=track.points[i],dx=b.x-a.x,dy=b.y-a.y;
+        const f=clamp(((p.x-a.x)*dx+(p.y-a.y)*dy)/(dx*dx+dy*dy||1),0,1);
+        const gap=distance(p,point(a,b,f));
+        if(gap>limit||gap>=(best?.gap??Infinity))continue;
+        best={trackId:track.id,index:f<.5?i-1:i,gap};
+      }
+    }
+    if(!best)return null;
+    return {trackId:best.trackId,index:best.index};
+  }
+  function resolveTrackPick(pick){
+    const track=tracks()[pick?.trackId],p=track?.points[pick?.index];
+    if(!p)return null;
+    if(pick.index===0)return {node:track.from,point:p};
+    if(pick.index===track.points.length-1)return {node:track.to,point:p};
+    return {node:window.ContourTrackSplit.nodeId(pick.trackId,pick.index),point:p,cut:pick};
+  }
+  function beforeAndAfter(leg,section,start,end){
+    if(!section?.design)return [{},{}];
+    const along=p=>section.path.reduce((a,b)=>distance(p,a)<distance(p,b)?a:b).d;
+    const entry=along(start),exit=along(end),[startApproach,endApproach]=section.design.approaches;
+    return [[0,entry],[Math.max(entry,exit),section.length]].map(([low,high])=>{
+      const inRange=d=>d>low&&d<high;
+      const vips=leg.vips.flatMap(vip=>{
+        const d=lerp(startApproach,section.length-endApproach,vip.f);
+        const f=(d-low)/(high-low);
+        return f>.025&&f<.975?[{...vip,f}]:[];
+      });
+      return {
+        handles:leg.handles.filter(handle=>inRange(along(handle))),vips,
+        crossingChoices:Object.fromEntries((section.crossings??[])
+          .filter(entry=>inRange(entry.d)&&leg.crossingChoices?.[entry.id])
+          .map(entry=>[entry.id,leg.crossingChoices[entry.id]]))
+      };
+    });
+  }
+  function pickStretch(p){
+    const leg=current(),pick=trackPick(p);
+    if(!leg||leg.trackId||leg.redraw){showIssue('Select a new track section to add a built stretch.');return;}
+    if(!pick){showIssue('Tap an existing track. Zoom in to choose the junction more precisely.');return;}
+    const built=stations(),exit=resolveTrackPick(pick);
+    if(!state.reuseStart){
+      if(built[exit.node]?.terminal&&exit.node!==leg.from){showIssue('Choose an entry beyond the terminal station.');return;}
+      change(()=>{state.reuseStart=pick;});
       return;
     }
-    const selected=known[via];
-    if(!selected){showIssue('No continuous rail corridor connects these stations. Select a section on the map to plan new links.');return;}
-    const nodes=allNodes();
-    const options=[selected.from,selected.to].map(from=>{
-      const middle=directed(selected,from);
-      const before=findCorridor(known,built,start.id,middle.from);
-      const after=findCorridor(known,built,middle.to,end.id);
-      const startLink=start.id!==middle.from&&!before.length;
-      const endLink=end.id!==middle.to&&!after.length;
-      const rejected=(middle.from!==start.id&&built[middle.from]?.terminal)||(middle.to!==end.id&&built[middle.to]?.terminal);
-      const penalty=(rejected?1e6:0)+
-        (startLink?distance(start,nodes.get(middle.from)):0)+(endLink?distance(end,nodes.get(middle.to)):0);
-      return {before,after,middle,startLink,endLink,penalty,rejected};
-    }).sort((a,b)=>a.penalty-b.penalty);
-    const {before,after,middle,startLink,endLink,rejected}=options[0];
-    if(rejected){showIssue('A terminal on this section would prevent a through connection.');return;}
-    const legs=[...before,middle,...after].map(({track,from,to})=>({trackId:track.id,from,to}));
-    if(startLink)legs.unshift(newLeg(start.id,middle.from,state.legTracks));
-    if(endLink)legs.push(newLeg(middle.to,end.id,state.legTracks));
-    change(()=>setLegs(legs));
+    const entry=resolveTrackPick(state.reuseStart);
+    if(!entry){showIssue('The entry is unavailable. Cancel picking to choose another entry.');return;}
+    if(entry.node===exit.node){showIssue('Choose a different point for the exit.');return;}
+    if(built[exit.node]?.terminal&&exit.node!==leg.to){showIssue('Choose an exit before the terminal station.');return;}
+    if(entry.node===leg.to||exit.node===leg.from){showIssue('Pick the entry and exit in the direction of travel.');return;}
+    const cuts=[...(state.trackCuts??[])];
+    for(const cut of [entry.cut,exit.cut]){
+      if(cut&&!cuts.some(c=>c.trackId===cut.trackId&&c.index===cut.index))cuts.push(cut);
+    }
+    let network;
+    try{network=window.ContourTrackSplit.plan(tracks(),cuts).tracks;}
+    catch(error){showIssue(error.message);return;}
+    const remaining=state.legs.filter(other=>other!==leg);
+    const blockedTracks=new Set(remaining.map(other=>other.trackId??other.redraw).filter(Boolean));
+    if([...blockedTracks].some(trackId=>!network[trackId])){
+      showIssue('Choose junctions outside the track sections already in this route.');
+      return;
+    }
+    const occupied=new Set(remaining.flatMap(other=>[other.from,other.to]));
+    if((occupied.has(entry.node)&&entry.node!==leg.from)||(occupied.has(exit.node)&&exit.node!==leg.to)){
+      showIssue('Choose a stretch outside the other sections of this route.');return;
+    }
+    const blockedNodes=new Set([...occupied,leg.from,leg.to]);
+    blockedNodes.delete(entry.node);
+    blockedNodes.delete(exit.node);
+    const stretch=findCorridor(network,built,entry.node,exit.node,blockedNodes,blockedTracks);
+    if(!stretch.length){showIssue('Choose an exit connected to the entry by a continuous stretch of track.');return;}
+    const [beforeEdits,afterEdits]=beforeAndAfter(leg,activeSection(),entry.point,exit.point);
+    const before=entry.node===leg.from?null:{...newLeg(leg.from,entry.node,leg.tracks),...beforeEdits};
+    const after=exit.node===leg.to?null:{...newLeg(exit.node,leg.to,leg.tracks),...afterEdits};
+    change(()=>{
+      const sections=[before,...stretch.map(reusedDraft),after].filter(Boolean);
+      state.legs.splice(state.active,1,...sections);
+      state.trackCuts=cuts;
+      if(after)state.active+=sections.length-1;
+      setTool('shape');
+      activeLevel=-1;
+    });
   }
   function roadTie(s,removed=stationConflicts(s).filter(row=>roadsMarked().includes(row.key)).map(row=>row.key)){
     const city=town(s.place);
@@ -535,7 +631,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       runningTrack:preview.legs.some(leg=>leg.track.tracks===2)?state.runningTrack??'auto':'auto',
       platforms:state.stations.map((_,side)=>assignedPlatform(side)),
       stations:state.stations.map(s=>({...s,platformCount:platforms(s),tie:committedStation(s)?.tie??roadTie(s,preview.roads)})),
-      trackPaths:preview.legs.map(l=>l.track),trackIds:preview.legs.map(l=>l.track.id),trackDirections:preview.legs.map(l=>l.direction)};
+      trackCuts:state.trackCuts??[],trackPaths:preview.legs.map(l=>l.track),trackIds:preview.legs.map(l=>l.track.id),trackDirections:preview.legs.map(l=>l.direction)};
     const result=routeEdit?updateRailRoute?.(routeEdit.index,route):commit?.(route,preview.roads,preview.lots);
     if(result===false||typeof result==='string'){showIssue(result||'The rail route could not be saved.');return;}
     close(true);
@@ -728,7 +824,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       if(leg.handles.length)fields.push(button('Remove bend',()=>change(()=>{leg.handles.pop();})));
     }
     if(Object.keys(tracks()).length){
-      fields.push(button('Select built track',()=>{state.tool=state.tool==='reuse'?'shape':'reuse';refresh();},state.tool==='reuse'));
+      if(leg&&!leg.trackId&&!leg.redraw)fields.push(button(state.tool==='reuse'?'Cancel picking':'+ Reuse track',()=>{setTool(state.tool==='reuse'?'shape':'reuse');refresh();},state.tool==='reuse'));
       fields.push(button('Find connected track',()=>useCorridor()));
       fields.push(button('Join at node',()=>{state.tool=state.tool==='join'?'shape':'join';refresh();},state.tool==='join'));
       if(state.legs.length>1||state.legs[0]?.trackId)fields.push(button('Clear track selection',()=>change(()=>setLegs([
@@ -757,10 +853,58 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       q('.editorCrossings').scrollIntoView({block:'nearest'});
     }
   }
+  const schematic=q('.rl-schematic');
+  // Keep the map available for picking on narrow screens.
+  schematic.open=window.matchMedia('(min-width: 700px)').matches;
+  function updateSchematic(running){
+    schematic.hidden=!running;
+    if(!running)return;
+    const items=q('.rl-itinerary');
+    items.replaceChildren();
+    function stop(side){
+      const row=document.createElement('div');
+      row.className='rl-diagram-stop';
+      const letter=document.createElement('b');
+      letter.textContent=side?'B':'A';
+      const name=document.createElement('strong');
+      name.textContent=town(state.places[side])?.name??'Station';
+      const pad=document.createElement('small');
+      pad.textContent='P'+assignedPlatform(side);
+      row.append(letter,name,pad);items.append(row);
+    }
+    stop(0);
+    for(const [index,leg] of state.legs.entries()){
+      const built=Boolean(leg.trackId), actual=preview.legs[index];
+      const row=document.createElement('button');
+      row.type='button';
+      row.className='rl-diagram-leg';
+      row.dataset.built=built;
+      row.disabled=Boolean(state.review);
+      row.setAttribute('aria-pressed',String(index===state.active));
+      const rails=document.createElement('i');
+      rails.className='rl-diagram-rails';
+      const double=(actual?.track.tracks??leg.tracks)===2;
+      rails.dataset.double=double;
+      if(double)rails.dataset.lane=state.runningTrack??'auto';
+      const title=document.createElement('span');
+      title.textContent=built?'Existing track':'New track';
+      const span=document.createElement('small');
+      span.textContent=actual?Math.round(length(actual.points)*40)+' m':'';
+      row.setAttribute('aria-label','Section '+(index+1)+', '+title.textContent+', '+(double?'double':'single')+' track, '+span.textContent);
+      row.append(rails,title,span);
+      row.onclick=()=>{
+        state.active=index;setTool('shape');activeLevel=-1;issue='';refresh();save();
+        q('.rl-itinerary').querySelectorAll('button')[index]?.focus({preventScroll:true});
+      };
+      items.append(row);
+    }
+    stop(1);
+  }
   function refresh(){
     if(!state)return;
     const choosing=state.step===-1,running=state.step===2&&!stationEdit;
     preview=running?routePreview():null;
+    updateSchematic(running);
     crossingMarkers=shared.crossingEntries(preview?.legs.map(leg=>leg.section)??[]);
     const crossingPanel=q('.editorCrossings');
     if(running&&!state.review){
@@ -809,7 +953,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       (insufficient?'Insufficient funds for this route.':''):stationIssue(activeStation(),state.step);
     const instruction=choosing?(state.places[1]?'Continue to place the two stations.':state.places[0]?'Choose a destination on the map or below.':'Choose a departure town or industry on the map or below.'):
       state.review?'Check the construction cost and marked removals before confirming.':stationEdit?'Review the platform configuration.':running?
-      state.tool==='reuse'?'Tap a built track section to route through it.':
+      state.tool==='reuse'?(state.reuseStart?'Tap the exit of the stretch in the direction of travel.':'Tap the entry of the existing track stretch to reuse.'):
       state.tool==='join'?'Tap a marked track endpoint to join it. Crossing lines do not create a junction.':
       current()?.trackId?'This section uses built track.':state.profile?'Tap the profile to add a grade point, then drag to adjust it.':'Tap the map to bend the alignment. Open Elevation profile to set track elevations.':
       'Tap or drag to place the platform. Select a built station to reuse it.';
@@ -877,17 +1021,24 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       label(site,site.name,'#224a3c');
     }
     const selected=new Set(preview?.legs.filter(l=>!l.section).map(l=>l.track.id)??[]);
-    for(const track of Object.values(tracks())){
+    for(const track of Object.values(knownTracks())){
       const color=selected.has(track.id)?'#6de4d2':'#222625';
       const double=track.tracks===2||preview?.legs.some(leg=>leg.track.id===track.id&&leg.track.tracks===2);
       path(track.points,'#e1e1c4bf',double?6:4);
       path(track.points,color,double?3:2);
     }
+    if(state.reuseStart){
+      const entry=resolveTrackPick(state.reuseStart);
+      if(entry){mark(entry.point,7,'#6de4d2');label(entry.point,'Entry','#224a3c');}
+    }
     if(state.tool==='join'&&state.step===2){
       for(const node of allNodes().values())mark(node,4,'#fff4b4');
     }
     for(const [i,leg] of (preview?.legs??[]).entries()){
-      if(!leg.section)continue;
+      if(!leg.section){
+        if(i===state.active)path(leg.points,'#1c846c',4);
+        continue;
+      }
       const active=i===state.active, color=active?'#ffde7e':'#dbaa56';
       path(leg.points,'#412e15',leg.track.tracks===2?7:5);
       path(leg.points,color,leg.track.tracks===2?4:2.5);
@@ -1049,9 +1200,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     const crossing=shared.hitCrossing(screen,crossingMarkers,p);
     if(crossing){selectCrossing(crossing);return;}
     if(state.tool==='reuse'){
-      const found=Object.values(tracks()).map(track=>({track,gap:nearest(worldPoint,track.points)})).sort((a,b)=>a.gap-b.gap)[0];
-      if(!found||found.gap*scale()>15){showIssue('Tap closer to a built section.');return;}
-      useCorridor(found.track.id);
+      pickStretch(worldPoint);
       return;
     }
     if(state.tool==='join'){

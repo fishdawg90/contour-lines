@@ -100,11 +100,9 @@
     meshes.set(key,model);
     return model;
   }
-  function frames(points){
-    return points.map((p,i)=>{
-      const a=points[Math.max(0,i-1)],b=points[Math.min(points.length-1,i+1)];
-      const distance=Math.hypot(b.x-a.x,b.y-a.y)||1;
-      const dx=(b.x-a.x)/distance,dy=(b.y-a.y)/distance;
+  function frames(path){
+    return path.points.map((p,i)=>{
+      const {x:dx,y:dy}=ContourRail.trackTangent(path,i);
       return (offset,z)=>[p.x-dy*offset,p.y+dx*offset,p.z+z];
     });
   }
@@ -113,7 +111,7 @@
       const {lines}=ContourRail.trackLines(path,null,flags.stationProfile);
       return lines.flatMap(line=>trackMesh({...line,tracks:1},wet));
     }
-    const {points,tracks}=path,section=frames(points);
+    const {points,tracks}=path,section=frames(path);
     const tapered=flags.taperStart||flags.taperEnd;
     const total=tapered?points.slice(1).reduce((sum,point,i)=>sum+Math.hypot(point.x-points[i].x,point.y-points[i].y),0):0;
     const taper=distance=>tapered?ContourRail.taperFactor(distance,total,flags.taperStart,flags.taperEnd):1;

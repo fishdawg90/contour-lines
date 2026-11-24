@@ -652,6 +652,7 @@ window.ContourEconomy = function(valley) {
         if(t.lowMonths>=downgradeMonths){
           received.peakExpansion=Math.max(received.peakExpansion??0,received.expansion);
           received.expansion--;
+          t.growthPoints=townProgress(city).goal*.75;
           t.lowMonths=0;
         }
       }
