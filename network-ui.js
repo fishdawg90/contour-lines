@@ -1106,7 +1106,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       for(const [id,name] of [['standard','Standard map'],['range','Station catchments'],[v.region?'service:starter':'service:timber',cargoLabel],['service:passengers','Passenger satisfaction'],['routes','Routes and vehicles']])
         body.append(button((overlay===id?'✓  ':'')+name,()=>setOverlay(id),'menuItem'));
       if(overlay==='range')body.append(node('small','Green dots mark homes reached along connected streets. Local stops can extend coverage beyond a station.'));
-      if(overlay==='routes')body.append(node('small','Tap a highlighted route or vehicle badge for its accounts. Badges show line number and load / capacity. Q marks a queue. Full means the town has no room to unload.'));
+      if(overlay==='routes')body.append(node('small','Tap a highlighted route or vehicle badge for its accounts. Badges show line number, passenger or goods icon, and load / capacity. Q marks a queue. Full means the town has no room to unload.'));
 
     }
     if(view==='routeChoice'){

@@ -51,7 +51,17 @@ window.ContourHUD=(()=>{
     path.setAttribute('d',shapes[shape]);svg.append(path);
     return svg;
   }
+  const canvasShapes=new Map();
+  function drawIcon(ctx,cargo,x,y,size,ink=color(cargo)){
+    const [shape]=cargoStyles[cargo]??cargoStyles.depot;
+    if(!canvasShapes.has(shape))canvasShapes.set(shape,new Path2D(shapes[shape]));
+    ctx.save();
+    ctx.translate(x,y);ctx.scale(size/20,size/20);
+    ctx.strokeStyle=ink;ctx.lineWidth=1.7;ctx.lineCap='round';ctx.lineJoin='round';
+    ctx.stroke(canvasShapes.get(shape));
+    ctx.restore();
+  }
   const short=town=>acronyms[town.id]??town.name.slice(0,3).toUpperCase();
   const percent=rate=>rate==null?'—':Math.round(Math.min(1,Math.max(0,rate))*100)+'%';
-  return {short,trend,cargoLabel,color,icon,percent,tripColor:(towns,town)=>colors[towns.indexOf(town)%colors.length]};
+  return {short,trend,cargoLabel,color,icon,drawIcon,percent,tripColor:(towns,town)=>colors[towns.indexOf(town)%colors.length]};
 })();

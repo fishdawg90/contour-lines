@@ -43,9 +43,9 @@ canvas:active{cursor:grabbing}
 .info strong{color:var(--ink)}
 @media(max-width:400px){.controls{bottom:calc(var(--control-bottom) + 51px)}}
 </style>
-<link rel="stylesheet" href="./road-builder.css?v=0.1.4">
-<link rel="stylesheet" href="./rail-builder.css?v=0.1.4">
-<link rel="stylesheet" href="./network.css?v=0.1.4">
+<link rel="stylesheet" href="./road-builder.css?v=0.1.5">
+<link rel="stylesheet" href="./rail-builder.css?v=0.1.5">
+<link rel="stylesheet" href="./network.css?v=0.1.5">
 </head>
 <body>
 <div id="app">
@@ -55,7 +55,7 @@ canvas:active{cursor:grabbing}
 <canvas id="gpu" aria-hidden="true" hidden></canvas>
 <canvas id="scene" tabindex="0" aria-label="Three-dimensional valley. Pan with one finger, pinch with two, or rotate with three. Arrow keys rotate and tilt."></canvas>
 <div class="caption"><h2 id="look">Diorama studio</h2><p id="description">Loading the scene…</p></div>
-<button id="brand" aria-label="Company finances" aria-describedby="appVersion"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M2 17c4 0 3-11 9-11s6 8 11 5M2 21c6 0 5-11 10-11s6 7 10 5M4 11c2-5 4-9 9-9s6 6 9 5"/></svg><div><b>POCKET LOGISTICS</b><small id="cash">Road network</small><span id="appVersion">v0.1.4</span></div></button>
+<button id="brand" aria-label="Company finances" aria-describedby="appVersion"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M2 17c4 0 3-11 9-11s6 8 11 5M2 21c6 0 5-11 10-11s6 7 10 5M4 11c2-5 4-9 9-9s6 6 9 5"/></svg><div><b>POCKET LOGISTICS</b><small id="cash">Road network</small><span id="appVersion">v0.1.5</span></div></button>
 <div id="timeControls"><time id="calendar"></time><button id="speed" aria-label="Game speed" title="Change game speed">1×</button><div id="mapToggles">
 <button id="toggleRoutes" aria-label="Routes and vehicles" aria-pressed="true" title="Routes and vehicles"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18h9a4 4 0 0 0 0-8H9a2 2 0 0 1 0-4h8"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/></svg></button>
 <button id="toggleLabels" aria-label="Map labels" aria-pressed="true" title="Map labels"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11h-7l-4 3v-3H4zM8 9h8m-8 3h5"/></svg></button>
@@ -198,7 +198,7 @@ canvas:active{cursor:grabbing}
     <div class="editorCrossings" id="teCrossings" hidden></div>
     <div class="teActions"><button id="teUndo">Undo point</button><button id="teConfirm" class="buy">Build</button></div></div>
 </dialog>
-<script src="./demolition.js?v=0.1.4"></script><script src="./grade-separation.js?v=0.1.4"></script><script src="./town-network.js?v=0.1.4"></script><script src="./town-editor.js?v=0.1.4"></script><script src="./valley-assets.js?v=0.1.4"></script><script src="./biome-assets.js?v=0.1.4"></script><script src="./region.js?v=0.1.4"></script><script src="./freight.js?v=0.1.4"></script><script src="./rail-sim.js?v=0.1.4"></script><script src="./rail-assets.js?v=0.1.4"></script><script src="./crossings.js?v=0.1.4"></script><script src="./economy.js?v=0.1.4"></script><script src="./finance-charts.js?v=0.1.4"></script><script src="./route-overlay.js?v=0.1.4"></script><script src="./hud.js?v=0.1.4"></script><script src="./network-ui.js?v=0.1.4"></script><script src="./road-builder.js?v=0.1.4"></script><script src="./rail-builder.js?v=0.1.4"></script>
+<script src="./demolition.js?v=0.1.5"></script><script src="./grade-separation.js?v=0.1.5"></script><script src="./town-network.js?v=0.1.5"></script><script src="./town-editor.js?v=0.1.5"></script><script src="./valley-assets.js?v=0.1.5"></script><script src="./biome-assets.js?v=0.1.5"></script><script src="./region.js?v=0.1.5"></script><script src="./freight.js?v=0.1.5"></script><script src="./rail-sim.js?v=0.1.5"></script><script src="./rail-assets.js?v=0.1.5"></script><script src="./crossings.js?v=0.1.5"></script><script src="./economy.js?v=0.1.5"></script><script src="./finance-charts.js?v=0.1.5"></script><script src="./route-overlay.js?v=0.1.5"></script><script src="./hud.js?v=0.1.5"></script><script src="./network-ui.js?v=0.1.5"></script><script src="./road-builder.js?v=0.1.5"></script><script src="./rail-builder.js?v=0.1.5"></script>
 <script>
 (() => {
 'use strict';
@@ -2971,12 +2971,21 @@ function paint(items,ordered=true){
     if(f.edge){ctx.strokeStyle=style.id==='ink'?'#333b36aa':'#644c4355';ctx.lineWidth=.75;ctx.stroke();}
   }
 }
-function label(text,p,offset,fill='#fffdf2e9',ink=style.ink,compact=false){
+function label(text,p,offset,fill='#fffdf2e9',ink=style.ink,compact=false,badge=null){
   const [x,y]=project(p);
   ctx.font=(compact?'650 10px':'600 12px')+' system-ui';ctx.textAlign='center';ctx.textBaseline='middle';
-  const w=ctx.measureText(text).width+(compact?10:16),yy=y+offset,half=compact?8:10;
+  const prefixWidth=badge?ctx.measureText(badge.prefix).width:0;
+  const contentWidth=ctx.measureText(text).width+prefixWidth+(badge?18:0);
+  const w=contentWidth+(compact?10:16),yy=y+offset,half=compact?8:10;
   ctx.fillStyle=fill;ctx.beginPath();if(ctx.roundRect)ctx.roundRect(x-w/2,yy-half,w,half*2,4);else ctx.rect(x-w/2,yy-half,w,half*2);ctx.fill();
-  ctx.fillStyle=ink;ctx.fillText(text,x,yy);
+  ctx.fillStyle=ink;
+  if(badge){
+    const left=x-contentWidth/2;
+    ctx.textAlign='left';ctx.fillText(badge.prefix,left,yy);
+    ContourHUD.drawIcon(ctx,badge.cargo,left+prefixWidth,yy-7,14,ink);
+    ctx.fillText(text,left+prefixWidth+18,yy);
+    ctx.textAlign='center';
+  }else ctx.fillText(text,x,yy);
   return {x,y:yy,w};
 }
 const carX=()=>-4.75+(Math.sin(trainTime*.37-1.35)+1)*4.9;
@@ -3594,7 +3603,9 @@ function drawRouteOverlay(){
       seen.push(q);
       const capacity=m.capacity(r,v);
       const waitLabel={storage:'Full',filling:'Loading',orders:'Orders',bay:'Q',traffic:'Q'}[v.waiting];
-      const badge=label((hit.index+1)+' · '+v.load+'/'+capacity+(waitLabel?' · '+waitLabel:''),point,-12-offset*20,'#26312d',color);
+      const cargo=r.local?(r.local==='delivery'?m.localCargo(r):'passengers'):(m.routeTrade(r)?.cargo??r.cargo??'passengers');
+      const badge=label(v.load+'/'+capacity+(waitLabel?' · '+waitLabel:''),point,-12-offset*20,'#26312d',color,false,
+        {cargo,prefix:(hit.index+1)+' · '});
       hit.badges.push(badge);
       ctx.fillStyle=color;ctx.beginPath();ctx.arc(q[0],q[1]+3,3,0,Math.PI*2);ctx.fill();
     }
