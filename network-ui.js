@@ -1,4 +1,4 @@
-window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,save,restart,stationDepot,editStation,upgradeRailTrack,editRailRoute,editRailStation,deleteRailStation,switchRegion,getSpeed,setSpeed,buildRoute,editTown,deleteLoop,deleteRoute}){
+window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,save,restart,stationDepot,editStation,openRailway,upgradeRailTrack,editRailRoute,editRailStation,deleteRailStation,switchRegion,getSpeed,setSpeed,buildRoute,editTown,deleteLoop,deleteRoute}){
   const el=id=>document.getElementById(id), panel=el('networkPanel'),body=el('panelBody'),footer=el('panelFooter');
   const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   let view='',overlay='routes',routeIndex=0,filter='',type='',mode='',listScroll=0,townId='';
@@ -237,6 +237,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
         const kind=m.isFreight(route)?'truck':'bus';
         if(isRail(route)){
           body.insertBefore(node('section','','railManagement'),more);
+          if(openRailway)footer.append(button('Service tracks',()=>openRailway(routeIndex),'loopAction'));
           if(editRailRoute)footer.append(button('Edit track and stations',()=>{open('');editRailRoute(route,routeIndex);},'loopAction'));
         }else{
           footer.append(button('Add '+kind+' · '+cash(m.vehiclePrice),()=>{
@@ -1092,6 +1093,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     delete body.dataset.inspector;
     el('panelTitle').textContent=title;body.replaceChildren();
     if(view==='track'){
+      body.append(button('Edit railway · paths and connections',()=>openRailway(),'menuItem'));
       const track=v.transport.railTracks?.[selectedTrack];
       if(!track){body.append(node('small','This track is no longer available.'));return;}
       const stations=v.transport.railStations??{};
@@ -1119,6 +1121,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       body.append(button('Local delivery loop',()=>{open('');editTown('delivery');},'menuItem'));
     }
     if(view==='tools'){
+      body.append(button('Railway · tracks and services',()=>openRailway(),'menuItem'));
       for(const [id,name] of [['towns','Towns and industries'],['layers','Map overlays']])body.append(button(name+'  ›',()=>open(id),'menuItem'));
       body.append(button('Whole valley',()=>{focus('region');open('');},'menuItem'));
       body.append(button(resumeState()?'Pause simulation':'Resume simulation',()=>{pause();render();},'menuItem'));

@@ -92,15 +92,16 @@
   }
   function rewriteRoute(route,replacements){
     if(!route.trackIds?.some(id=>replacements.has(id)))return route;
-    const trackIds=[],trackDirections=[];
+    const trackIds=[],trackDirections=[],trackLanes=[];
     for(const [i,id] of route.trackIds.entries()){
       const direction=route.trackDirections?.[i]===-1?-1:1;
       const pieces=replacements.get(id);
       if(!pieces)trackIds.push(id);
       else trackIds.push(...(direction===1?pieces:[...pieces].reverse()).map(piece=>piece.id));
       trackDirections.push(...Array(pieces?.length??1).fill(direction));
+      trackLanes.push(...Array(pieces?.length??1).fill(route.trackLanes?.[i]??route.runningTrack??'auto'));
     }
-    return {...route,trackIds,trackDirections};
+    return {...route,trackIds,trackDirections,trackLanes};
   }
   window.ContourTrackSplit={plan:planSplits,nodeId,rewriteRoute};
 
@@ -109,28 +110,37 @@
     if(!transport||tracks.length<2)return new Map();
     const cached=crossingCache.get(transport);
     if(cached&&tracks.length===cached.tracks.length&&tracks.every((track,i)=>track===cached.tracks[i]))return cached.byTrack;
-    const bins=new Map(),byTrack=new Map(),size=4;
+    const bins=new Map(),byTrack=new Map(),positions=new Map(),size=4;
     for(const track of tracks){
       const resources=new Set();
       byTrack.set(track.id,resources);
+      let travelled=0;
       for(let i=1;i<track.points.length;i++){
         const a=track.points[i-1],b=track.points[i];
+        const middle=travelled+Math.hypot(b.x-a.x,b.y-a.y)/2;
+        travelled+=Math.hypot(b.x-a.x,b.y-a.y);
         for(let x=Math.floor(Math.min(a.x,b.x)/size);x<=Math.floor(Math.max(a.x,b.x)/size);x++){
           for(let y=Math.floor(Math.min(a.y,b.y)/size);y<=Math.floor(Math.max(a.y,b.y)/size);y++){
             const key=x+':'+y,nearby=bins.get(key)??[];
             for(const other of nearby){
               if(track===other.track||!levelCrossing(a,b,other.a,other.b,track,other.track))continue;
               const resource='crossing:'+JSON.stringify([track.id,other.track.id].sort());
+              if(!positions.has(resource))positions.set(resource,new Map());
+              const locations=positions.get(resource);
+              for(const [id,d] of [[track.id,middle],[other.track.id,other.middle]]){
+                const range=locations.get(id)??[d,d];
+                locations.set(id,[Math.min(range[0],d),Math.max(range[1],d)]);
+              }
               resources.add(resource);
               byTrack.get(other.track.id).add(resource);
             }
-            nearby.push({track,a,b});
+            nearby.push({track,a,b,middle});
             bins.set(key,nearby);
           }
         }
       }
     }
-    crossingCache.set(transport,{tracks,byTrack});
+    crossingCache.set(transport,{tracks,byTrack,positions});
     return byTrack;
   }
   function levelCrossing(a,b,c,d,first,second){
@@ -334,7 +344,7 @@
         const station=node===track?.from?profile?.start:profile?.end;
         return station?.mixed?1:undefined;
       }
-      return {id,runningTrack:route.runningTrack,tracks:track?.tracks===2?2:1,direction,length,from:track?.from,to:track?.to,profile,
+      return {id,runningTrack:route.trackLanes?.[i]??route.runningTrack,tracks:track?.tracks===2?2:1,direction,length,from:track?.from,to:track?.to,profile,
         startPlatform:assigned(track?.from),endPlatform:assigned(track?.to)};
     });
     if(!blocks.length)blocks.push({id:'route:'+JSON.stringify(route.stations?.map(s=>s.id??[s.x,s.y])),tracks:1,direction:1,length:path.at(-1).length});
@@ -377,7 +387,23 @@
       .filter(end=>end!=null&&(junctions.get(end)>2||(singleEnds.has(end)&&doubleEnds.has(end))));
     const crossings=crossingResources(transport);
     const crossingsOnRoute=[...new Set(blocks.flatMap(block=>[...(crossings.get(block.id)??[])]))];
-    const railRun={mode:'rail',path,length:path.at(-1).length,segments,blocks,switches,crossings:crossingsOnRoute};
+    const signalZones=[];
+    const locations=crossingCache.get(transport)?.positions??new Map();
+    for(const block of blocks){
+      for(const key of crossings.get(block.id)??[]){
+        const range=locations.get(key)?.get(block.id);
+        if(!range)continue;
+        const [a,b]=block.direction===1?range:[block.length-range[1],block.length-range[0]];
+        signalZones.push({key,start:Math.max(0,(block.start+a-1)*metresPerUnit),
+          end:Math.min(path.at(-1).length*metresPerUnit,(block.start+b+1)*metresPerUnit)});
+      }
+      for(const [node,d] of [[block.direction===1?block.from:block.to,block.start],
+        [block.direction===1?block.to:block.from,block.end]]){
+        if(switches.includes(node))signalZones.push({key:'junction:'+node,start:Math.max(0,(d-1)*metresPerUnit),
+          end:Math.min(path.at(-1).length*metresPerUnit,(d+1)*metresPerUnit)});
+      }
+    }
+    const railRun={mode:'rail',path,length:path.at(-1).length,segments,blocks,switches,crossings:crossingsOnRoute,signalZones};
     const sample=estimate(defaultConsist(route.cargo??'passengers'),route.cargo??'passengers',railRun);
     railRun.travel=Number.isFinite(sample.travel)&&Number.isFinite(sample.returnTravel)?
       (sample.travel+sample.returnTravel)/2:railRun.length*1.6;
@@ -400,6 +426,10 @@
   function blockKeys(run,from){
     return [...run.blocks.map(block=>'track:'+block.id+(block.tracks===2?'/'+(-runningLane(block,from)):'')),
       ...run.switches.map(end=>'junction:'+end),...run.crossings];
+  }
+  function signalWindows(run,from){
+    const total=run.length*metresPerUnit;
+    return (run.signalZones??[]).map(zone=>from?{...zone,start:total-zone.end,end:total-zone.start}:zone);
   }
   const speedForCurve=radius=>Math.sqrt(Math.max(3,radius)*.85);
   const profiles=new WeakMap(),estimates=new WeakMap();
@@ -519,6 +549,10 @@
     return {x:a.x+(b.x-a.x)*f-dy*lateral,y:a.y+(b.y-a.y)*f+dx*lateral,z:a.z+(b.z-a.z)*f,
       tunnel:Boolean((f<.5?a:b).tunnel),yaw,angle:yaw,pitch:Math.atan2((b.z-a.z)*direction,span),direction};
   }
+  function connectionCost(section,regional=false){
+    return Math.round((section.length*40*415+section.waterLength*1620)*(regional?.25:1)+
+      (section.cut*13+section.fill*18)*(regional?.12:1)+(section.crossingCost??0));
+  }
   function secondTrackCost(track,regional=false){
     let span=0,bridges=0;
     for(let i=1;i<track.points.length;i++){
@@ -527,5 +561,5 @@
     }
     return Math.round((span*40*245+bridges*40*815)*(regional?.25:1));
   }
-  window.ContourRail={secondTrackCost,locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,runningLane,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trackTangent,trainSpan};
+  window.ContourRail={connectionCost,signalWindows,secondTrackCost,locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,runningLane,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trackTangent,trainSpan};
 })();

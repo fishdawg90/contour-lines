@@ -652,7 +652,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       runningTrack:preview.legs.some(leg=>leg.track.tracks===2)?state.runningTrack??'auto':'auto',
       platforms:state.stations.map((_,side)=>assignedPlatform(side)),
       stations:state.stations.map(s=>({...s,platformCount:platforms(s),tie:committedStation(s)?.tie??roadTie(s,preview.roads)})),
-      trackCuts:state.trackCuts??[],trackPaths:preview.legs.map(l=>l.track),trackIds:preview.legs.map(l=>l.track.id),trackDirections:preview.legs.map(l=>l.direction)};
+      trackLanes:state.legs.map(leg=>leg.lane??state.runningTrack??'auto'),trackCuts:state.trackCuts??[],trackPaths:preview.legs.map(l=>l.track),trackIds:preview.legs.map(l=>l.track.id),trackDirections:preview.legs.map(l=>l.direction)};
     const result=routeEdit?updateRailRoute?.(routeEdit.index,route):commit?.(route,preview.roads,preview.lots);
     if(result===false||typeof result==='string'){showIssue(result||'The rail route could not be saved.');return;}
     close(true);
@@ -820,7 +820,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     if(preview.legs.some(leg=>leg.track.tracks===2)){
       fields.push(select('Running track',[
         ['auto','Automatic · by direction'],['left','Left from A · both ways'],['right','Right from A · both ways']
-      ],state.runningTrack??'auto',value=>change(()=>{state.runningTrack=value;})));
+      ],state.runningTrack??'auto',value=>change(()=>{state.runningTrack=value;state.legs.forEach(leg=>{leg.lane=value;});})));
       if(state.runningTrack==='left'||state.runningTrack==='right')stats.push('Both ways on the '+state.runningTrack+' track from A');
     }
     const pending=state.stations.flatMap(s=>stationConflicts(s,stationTrackCount(s,preview.legs))).filter(row=>!roadsMarked().includes(row.key)&&!protectedRoad(row.key));
@@ -1384,7 +1384,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
         const track=tracks()[id]??route.trackPaths?.find(p=>p.id===id);
         if(!track)return null;
         const {from,to}=directed(track,route.trackDirections?.[i]===-1?track.to:track.from);
-        return {trackId:id,from,to};
+        return {trackId:id,from,to,lane:route.trackLanes?.[i]??route.runningTrack??'auto'};
       }).filter(Boolean);
       state={step:2,places:endpoints.map(s=>s.place),stations:endpoints,legs,runningTrack:route.runningTrack??'auto',legTracks:1,active:0,tool:'shape',profile:false,platforms:route.platforms?.slice()??[1,1],cargo:(route.cargo??'passengers')+'|'+route.cargoFrom};
       if(!legs.length)initializeLegs();

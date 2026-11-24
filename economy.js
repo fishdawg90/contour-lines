@@ -1396,7 +1396,7 @@ window.ContourEconomy = function(valley) {
   }
   function railResources(entry,from){
     const {route,run}=entry;
-    const blocks=rail.blockKeys(run,from);
+    const blocks=rail.blockKeys(run,from).filter(key=>key.startsWith('track:'));
     const ends=route.stations.flatMap((station,side)=>{
       const block=side?run.blocks.at(-1):run.blocks[0];
       const key='station:'+stationKey(station),platform=route.platforms?.[side];
@@ -1421,7 +1421,32 @@ window.ContourEconomy = function(valley) {
     return [...blocks,...ends];
   }
   function advanceRail(entries,dt,crossings){
-    const claims=new Map(),staged=[];
+    const claims=new Map(),staged=[],signals=new Map();
+    // Occupied and previously reserved junctions remain locked until the tail clears.
+    for(const {route,run,service} of entries)for(const vehicle of service.vehicles){
+      const motion=railState(vehicle);
+      if(!motion.active){motion.signals=[];continue;}
+      const length=railQuote(route,vehicle).length;
+      const front=Math.max(motion.distance,Math.min(length+1,run.length*40-1));
+      const held=new Set(motion.signals??[]);
+      motion.signals=rail.signalWindows(run,motion.from).filter(zone=>
+        front-length<=zone.end&&(held.has(zone.key)||front>=zone.start&&front-length<=zone.end))
+        .map(zone=>zone.key);
+      for(const key of motion.signals)signals.set(key,vehicle);
+    }
+    function signalLimit(run,motion,vehicle,quote,cargo){
+      const distance=motion.distance;
+      const braking=Math.max(.1,Math.min(quote.brake/rail.massFor(quote,cargo,vehicle.load),1.1));
+      const lookAhead=motion.speed*motion.speed/(2*braking)+motion.speed*dt*3+Math.max(45,quote.length+5);
+      const zones=rail.signalWindows(run,motion.from).filter(zone=>zone.end>=distance-quote.length&&zone.start<=distance+lookAhead);
+      const blocked=zones.filter(zone=>signals.has(zone.key)&&signals.get(zone.key)!==vehicle);
+      if(blocked.length)return Math.max(distance,Math.min(...blocked.map(zone=>zone.start))-3);
+      for(const zone of zones){
+        signals.set(zone.key,vehicle);
+        if(!motion.signals.includes(zone.key))motion.signals.push(zone.key);
+      }
+      return Infinity;
+    }
     for(const entry of entries){
       const {route,run,service,plan}=entry;
       const cargo=railCargo(route);
@@ -1431,7 +1456,7 @@ window.ContourEconomy = function(valley) {
           staged.push({entry,vehicle,motion,quote,cargo});
           continue;
         }
-        let crossingStop=false;
+        let crossingStop=false,signalStop=false;
         if(motion.dwell>0){
           const next=motion.dwell+dt,destination=1-motion.from;
           if(next>=unloadTime&&vehicle.load){
@@ -1455,8 +1480,10 @@ window.ContourEconomy = function(valley) {
         }else{
           const previous=motion.distance;
           motion.travelElapsed=(motion.travelElapsed??0)+dt;
-          const stop=crossings.trainLimit(route,run,vehicle,quote);
+          const signal=signalLimit(run,motion,vehicle,quote,cargo);
+          const stop=Math.min(signal,crossings.trainLimit(route,run,vehicle,quote));
           const done=rail.advance(run,motion,quote,cargo,vehicle.load,dt,stop);
+          signalStop=Number.isFinite(signal)&&signal-motion.distance<1&&motion.speed<.6;
           crossingStop=Number.isFinite(stop)&&stop-motion.distance<1&&motion.speed<.6;
           const km=(motion.distance-previous)/1000;
           const expense=km*railRunningCost(vehicle.consist);
@@ -1468,11 +1495,11 @@ window.ContourEconomy = function(valley) {
             motion.braking=0;
           }
         }
-        vehicle.waiting=crossingStop?'crossing':motion.stallTime>1&&motion.dwell===0?'traction':null;
+        vehicle.waiting=signalStop?'signal':crossingStop?'crossing':motion.stallTime>1&&motion.dwell===0?'traction':null;
         for(const key of railResources(entry,motion.from))claims.set(key,vehicle);
       }
     }
-    // Older requests are considered first. Reserve the complete itinerary atomically.
+    // Keep shared running sections reserved for the trip. Pinch points are reserved locally.
     staged.sort((a,b)=>(b.motion.waitAge??0)-(a.motion.waitAge??0));
     for(const {entry,vehicle,motion,quote,cargo} of staged){
       const {route,run,plan,service}=entry,from=motion.from;
@@ -1487,6 +1514,9 @@ window.ContourEconomy = function(valley) {
         vehicle.waiting='signal';
         motion.waitAge=(motion.waitAge??0)+dt;
         continue;
+      }
+      if(Number.isFinite(signalLimit(run,motion,vehicle,quote,cargo))){
+        vehicle.waiting='signal';motion.waitAge=(motion.waitAge??0)+dt;continue;
       }
       const freight=isFreight(route);
       const wait=vehicle.retiring?null:freight?
