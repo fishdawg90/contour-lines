@@ -1265,7 +1265,7 @@ window.ContourEconomy = function(valley) {
           const dock=yard?key+'/'+(ContourTown.stationBay(data,route,side)?.id??'1'):key;
           const industry=isIndustry(source(station));
           const internal=(run.extraTravel?.[side]??0)*.91/3.3;
-          return {key,dock,industry,yard,sharedBay:yard||industry,
+          return {dock,industry,yard,sharedBay:yard||industry,
             reach:Math.max(yard?internal+.5:0,valley.stationApproaches?.get(key)??0)};
         });
         services.push({route,run,service,stops,plan});
@@ -1280,7 +1280,7 @@ window.ContourEconomy = function(valley) {
       return city&&route.events?.length>=2&&route.length&&route.path?.length>1&&validLoop(route)?
         [{route,city,service:fleet(route)}]:[];
     });
-    // Reserve shared approaches across lines during the same simulation step.
+    // Reserve each bay approach separately. Shared stretches of road use physical traffic spacing.
     for(let left=dt;left>1e-7;left-=.10){
       const locks=new Map(),industryBays=new Map();
       for(const {route,run,service,stops} of services){
@@ -1295,8 +1295,8 @@ window.ContourEconomy = function(valley) {
           if(destination.sharedBay&&local>=run.travel)industryBays.set(destination.dock,v);
           if(!origin.reach&&!destination.reach)continue;
           const distance=local>=run.travel?length:distanceAlongLane(run,from,local);
-          if(origin.reach&&distance<origin.reach)locks.set(origin.key,route);
-          if(destination.reach&&length-distance<destination.reach&&(!destination.yard||local<run.travel))locks.set(destination.key,route);
+          if(origin.reach&&distance<origin.reach)locks.set(origin.dock,route);
+          if(destination.reach&&length-distance<destination.reach&&(!destination.yard||local<run.travel))locks.set(destination.dock,route);
         }
       }
       const span=Math.min(.10,left),traffic=townTraffic(services,loops),crossings=gradeCrossings(services,loops,railServices);
@@ -1429,7 +1429,7 @@ window.ContourEconomy = function(valley) {
     }
   }
   function advanceRoute({route,run,service,stops,plan},dt,locks,industryBays,traffic,crossings){
-    const elsewhere=stop=>stop.reach&&locks.has(stop.key)&&locks.get(stop.key)!==route;
+    const elsewhere=stop=>stop.reach&&locks.has(stop.dock)&&locks.get(stop.dock)!==route;
     const half=run.travel+bayTime,length=run.path.at(-1).length;
     const gap=Math.min(truckGap,length/4);
     const lanes=[[],[]],occupied=[false,false];
@@ -1503,8 +1503,8 @@ window.ContourEconomy = function(valley) {
         const expense=km*(hauling?90:65)*runningCostMultiplier;
         bookRoute(service,'km',km);bookRoute(service,'expenses',expense);book('operating',expense);
         v.phase=from*half+travel;
-        if(originStop.reach&&distance<originStop.reach)locks.set(originStop.key,route);
-        if(destinationStop.reach&&length-distance<destinationStop.reach)locks.set(destinationStop.key,route);
+        if(originStop.reach&&distance<originStop.reach)locks.set(originStop.dock,route);
+        if(destinationStop.reach&&length-distance<destinationStop.reach)locks.set(destinationStop.dock,route);
         if(travel===run.travel){
           // Entering the bay starts unloading. Delivery is booked when unloading ends.
           v.unloaded=v.load;
