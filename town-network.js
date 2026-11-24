@@ -233,9 +233,12 @@ function hubStock(valley,hub){
   const stocks=valley.transport.hubStock??={};
   return stocks[hub]??={timber:0,riders:{}};
 }
-function roadSections(route){
+function roadSectionEntries(route){
   const spans=route.roadSections??[[route.roadStart??0,route.roadEnd??route.points.length]];
-  return spans.map(([start,end])=>route.points.slice(start,end)).filter(points=>points.length>1);
+  return spans.flatMap(([start,end],part)=>end-start>1?[{part,start,end,nodes:route.points.slice(start,end)}]:[]);
+}
+function roadSections(route){
+  return roadSectionEntries(route).map(section=>section.nodes);
 }
 function roadEntries(transport){
   return [...transport.routes.flatMap((route,index)=>route.mode==='rail'?[]:[[route.roadId??index,route]]),
@@ -285,5 +288,5 @@ function stationDrive(base,bay){
   }
   return lane;
 }
-window.ContourTown={gap,stationKey,stationAnchor,openRoads,makeGraph,hubStations,hubServices,getGraph,hubStock,roadSections,roadEntries,archiveRoute,stationBay,primaryBay,stationDrive,detachedBays,routePad};
+window.ContourTown={gap,stationKey,stationAnchor,openRoads,makeGraph,hubStations,hubServices,getGraph,hubStock,roadSectionEntries,roadSections,roadEntries,archiveRoute,stationBay,primaryBay,stationDrive,detachedBays,routePad};
 })();

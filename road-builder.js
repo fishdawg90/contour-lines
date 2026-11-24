@@ -453,7 +453,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     const eligible=station=>!station.bayUse||station.bayUse==='both'||station.bayUse===use;
     const fit=station=>place.hubKey?{...station,hubKey:place.hubKey,place:place.id,name:place.name}:station;
     for(const [,route] of ContourTown.roadEntries(getValley().transport))for(const [side,station] of route.stations.entries()){
-      if(!belongs(station)||!eligible(station)||route.routePorts?.[side])continue;
+      if(route.removedStationSides?.includes(side)||route.cutRoad||!belongs(station)||!eligible(station)||route.routePorts?.[side])continue;
       const key=choiceKey(station);
       if(found.has(key))continue;
       const points=routePrefix(route,side),length=routeLength(points);
@@ -502,7 +502,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
       !draft.deleted.includes(access.tie?.key)).map(access=>({edge:access.side,points:access.points}));
     for(const [,route] of ContourTown.roadEntries(transport))route.stations.forEach((base,index)=>{
       const port=route.routePorts?.[index];
-      if(port&&choiceKey(base)===key&&(route.stationBays?.[index]??'1')===id){
+      if(!route.cutRoad&&!route.removedStationSides?.includes(index)&&port&&choiceKey(base)===key&&(route.stationBays?.[index]??'1')===id){
         approaches.push({edge:port.edge,points:routePrefix(route,index)});
       }
     });
@@ -559,7 +559,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
   function accessRoads(station,local){
     const rows=cityRoads().filter(row=>!local||row.city.id===station.place).map(({key,road})=>({key,nodes:road.nodes}));
     if(!local)for(const [index,route] of ContourTown.roadEntries(getValley().transport)){
-      ContourTown.roadSections(route).forEach((nodes,part)=>rows.push({key:'built/'+index+'/'+part,nodes}));
+      ContourTown.roadSectionEntries(route).forEach(({nodes,part})=>rows.push({key:'built/'+index+'/'+part,nodes}));
     }
     return rows;
   }
@@ -724,7 +724,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     if(roadGraphCache?.key===key)return roadGraphCache.graph;
     const roads=cityRoads().map(row=>({id:row.key,nodes:row.road.nodes}));
     for(const [index,route] of ContourTown.roadEntries(valley.transport)){
-      ContourTown.roadSections(route).forEach((nodes,part)=>roads.push({id:'built/'+index+'/'+part,nodes}));
+      ContourTown.roadSectionEntries(route).forEach(({nodes,part})=>roads.push({id:'built/'+index+'/'+part,nodes}));
     }
     const stations=draft.roadMode?[...valley.builtStations.filter(station=>station.mode!=='rail'),...draft.stations]:[];
     const seen=new Set();

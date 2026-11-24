@@ -45,7 +45,7 @@ canvas:active{cursor:grabbing}
 </style>
 <link rel="stylesheet" href="./road-builder.css">
 <link rel="stylesheet" href="./rail-builder.css?v=rail-platforms-3">
-<link rel="stylesheet" href="./network.css?v=rail-depot-2">
+<link rel="stylesheet" href="./network.css?v=dozer-1">
 </head>
 <body>
 <div id="app">
@@ -59,7 +59,8 @@ canvas:active{cursor:grabbing}
 <div id="timeControls"><time id="calendar"></time><button id="speed" aria-label="Game speed" title="Change game speed">1×</button><div id="mapToggles">
 <button id="toggleRoutes" aria-label="Routes and vehicles" aria-pressed="true" title="Routes and vehicles"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18h9a4 4 0 0 0 0-8H9a2 2 0 0 1 0-4h8"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/></svg></button>
 <button id="toggleLabels" aria-label="Map labels" aria-pressed="true" title="Map labels"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11h-7l-4 3v-3H4zM8 9h8m-8 3h5"/></svg></button>
-</div><button id="settings" aria-label="Settings" title="Settings">⚙</button><button id="gameHelp" aria-label="Instructions" title="Instructions">?</button></div>
+</div><button id="bulldoze" aria-label="Bulldoze" aria-pressed="false" title="Bulldoze"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M3 14V9h3l2-5h5v8l3 2m-4-9v5H7m8 7 4 1m-1-7 2 7 3 1H19l-3-2"/><rect x="2" y="14" width="13" height="5" rx="2.5"/></svg></button><button id="settings" aria-label="Settings" title="Settings">⚙</button><button id="gameHelp" aria-label="Instructions" title="Instructions">?</button></div>
+<div id="demolitionPanel" hidden><div><b id="demolitionTitle">Bulldoze</b><button id="demolitionClose" aria-label="Exit bulldozer">×</button></div><select id="demolitionChoices" aria-label="Nearby objects" hidden></select><p id="demolitionHint" role="status"></p><button id="demolitionApply" hidden>Demolish</button></div>
 <div id="mapPlaces" aria-label="Map locations"></div>
 <div id="serviceToggles" role="group" aria-label="Satisfaction overlays">
   <button id="togglePassengerService" aria-label="Passenger satisfaction" aria-pressed="false" title="Passenger satisfaction"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="6" r="3"/><path d="M5 21v-3a7 7 0 0 1 14 0v3z"/></svg></button>
@@ -131,6 +132,7 @@ canvas:active{cursor:grabbing}
     <li><strong>Plan a route.</strong> Choose a road or rail route from <em>New route</em>. Connect two towns for passengers, or an industry to a buyer for its cargo.</li>
     <li><strong>Build the line.</strong> Check the highlighted houses and streets while placing each station. Use <em>Elevation profile</em> to adjust the alignment before building. Choose a through station to extend the railway later. Use <em>Add platform</em> to give another service its own stopping track.</li>
     <li><strong>Manage your fleet.</strong> Open a route to check deliveries and profit. For rail, choose <em>Add train</em> or <em>Edit consist</em>. Tap a model to add it, or select a vehicle in the train to move or remove it.</li>
+    <li><strong>Clear the map.</strong> Choose <em>Bulldoze</em>, tap an object, review the highlighted section and affected services, then confirm.</li>
     <li><strong>Reach more homes.</strong> Add a local bus or delivery loop to connect streets around a station.</li>
   </ol>
   <p>Drag to pan and pinch to zoom. Tap the speed control to pause or speed up. Progress saves in this browser.</p>
@@ -193,7 +195,7 @@ canvas:active{cursor:grabbing}
   <div class="teBottom"><strong id="teStatus"></strong><p id="teHelp" class="editorGuide" aria-live="polite"></p>
     <div class="teActions"><button id="teUndo">Undo point</button><button id="teConfirm" class="buy">Build</button></div></div>
 </dialog>
-<script src="./town-network.js"></script><script src="./town-editor.js"></script><script src="./valley-assets.js"></script><script src="./biome-assets.js"></script><script src="./region.js"></script><script src="./freight.js"></script><script src="./rail-sim.js?v=rail-platforms-3"></script><script src="./rail-assets.js?v=rail-platforms-3"></script><script src="./crossings.js?v=rail-platforms-3"></script><script src="./economy.js?v=road-bay-4"></script><script src="./finance-charts.js"></script><script src="./route-overlay.js"></script><script src="./hud.js"></script><script src="./network-ui.js?v=rail-platforms-3"></script><script src="./road-builder.js?v=rail-platforms-3"></script><script src="./rail-builder.js?v=rail-platforms-3"></script>
+<script src="./demolition.js"></script><script src="./town-network.js?v=dozer-1"></script><script src="./town-editor.js"></script><script src="./valley-assets.js"></script><script src="./biome-assets.js"></script><script src="./region.js"></script><script src="./freight.js"></script><script src="./rail-sim.js?v=rail-platforms-3"></script><script src="./rail-assets.js?v=rail-platforms-3"></script><script src="./crossings.js?v=rail-platforms-3"></script><script src="./economy.js?v=road-bay-4"></script><script src="./finance-charts.js"></script><script src="./route-overlay.js"></script><script src="./hud.js"></script><script src="./network-ui.js?v=rail-platforms-3"></script><script src="./road-builder.js?v=dozer-1"></script><script src="./rail-builder.js?v=rail-platforms-3"></script>
 <script>
 (() => {
 'use strict';
@@ -930,7 +932,8 @@ function prepareTransport(valley){
       if(length)valley.stationApproaches.set(key,Math.max(length+.40,valley.stationApproaches.get(key)??0));
     }
     const roads=new Set(ContourTown.roadSections(route));
-    const firstStations=route.stations.filter(station=>{
+    const firstStations=route.stations.filter((station,side)=>{
+      if(route.removedStationSides?.includes(side))return false;
       const key=contourStationKey(station);
       if(stationsByKey.has(key))return false;
       stationsByKey.set(key,station);return true;
@@ -2981,6 +2984,7 @@ function draw(now){
     label('Millbank',[3.2,-2.16,.38],-10);
     label('Millbank station',[1.15,2.53,.47],-14);
   }
+  if(demolition.active)demolition.draw(ctx);
   if(showcase&&!document.hidden&&!reducedMotion.matches){
     ambientFrame=setTimeout(()=>{ambientFrame=0;requestFrame();},1000/24);
   }else if(!showcase&&playing&&!document.hidden&&$('roadBuilder').hidden&&$('railBuilder')?.hidden!==false&&!$('townEditor').open){
@@ -3170,6 +3174,7 @@ mapSurface.addEventListener('pointermove',e=>{
 });
 mapSurface.addEventListener('pointerup',e=>{
   if(mapTap?.id===e.pointerId&&trial&&gap(position(e),mapTap.at)<=7){
+    if(demolition.active){demolition.pick(position(e));mapTap=null;return;}
     if(mapTap.place){
       networkUI.inspectPlace(mapTap.place);
       mapTap=null;
@@ -3669,6 +3674,11 @@ function deleteRailStation(station){
   refreshRailway();
   return true;
 }
+const demolition=createDemolition({getValley:()=>trial,projectPoint:p=>project([p.x,p.y,p.z]),blockedByTransport,
+  open:()=>networkUI.open(null),redraw:requestFrame,changed:()=>{
+    if(focus==='trucks'&&!trial.transport.routes.length)chooseFocus('region');
+    refreshRailway();
+  }});
 function stationDepot(station){
   if(!trial.region)return null;
   const hubKey=ContourTown.stationKey(station);

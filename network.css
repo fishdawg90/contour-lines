@@ -352,3 +352,16 @@
   .railReportGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .railSelectionTools{margin-left:auto}
 }
+
+#bulldoze{display:grid;place-items:center;min-width:34px;min-height:44px;padding:5px;border:1px solid var(--edge);border-radius:8px;background:var(--coal);color:var(--pale)}
+#bulldoze svg{width:22px;height:22px}
+#bulldoze[aria-pressed=true],#demolitionApply{background:#ffbc96;color:#38281f}
+#demolitionPanel{position:absolute;z-index:3;bottom:max(14px,env(safe-area-inset-bottom));right:12px;width:min(300px,calc(100% - 24px));padding:10px;background:var(--coal);border:1px solid var(--edge);border-radius:12px;color:var(--pale)}
+#demolitionPanel>div{display:flex;align-items:center;justify-content:space-between}
+#demolitionPanel button,#demolitionPanel select{border:0;border-radius:7px;min-height:38px;font:inherit}
+#demolitionPanel select,#demolitionClose{background:#344139;color:var(--pale)}
+#demolitionChoices,#demolitionApply{width:100%}
+#demolitionHint{margin:6px 0;font-size:13px}
+#demolitionClose{min-width:38px}
+main.demolishing #mapPlaces,main.demolishing .controls,main.demolishing #serviceToggles{visibility:hidden}
+main.demolishing #scene{cursor:crosshair}
