@@ -193,7 +193,7 @@ window.ContourEconomy = function(valley) {
     person.queueCity=city;
     person.queuedAt=clock();
   }
-  const queueGraceWeeks=2,ridersPerPenalty=6,maxQueuePenalty=4;
+  const queueGraceWeeks=2,ridersPerPenalty=12,maxQueuePenalty=2;
   function overdueRiders(city){
     const cutoff=clock()-queueGraceWeeks*weekSeconds+1e-7;
     return Object.values(people).filter(p=>p.queue&&p.queueCity===city.id&&p.queuedAt<=cutoff).length;
@@ -536,7 +536,7 @@ window.ContourEconomy = function(valley) {
     const goal=80+Math.ceil(population/2)+20*level;
     const points=Math.min(goal,timber.growthPoints??0);
     const decayFactor=Math.min(2,Math.max(.5,state.growthDecayFactor??1));
-    const weeklyDecay=level===0?0:Math.round((4+3*level+population/64)*decayFactor);
+    const weeklyDecay=level===0?0:Math.round((1+1.5*level+population/128)*decayFactor);
     const naturalGrowth=level===0?1:0;
     const overdue=overdueRiders(city),queuePenalty=Math.min(maxQueuePenalty,Math.floor(overdue/ridersPerPenalty));
     const lastMonthGrowth=timber.lastMonthGrowth??null;

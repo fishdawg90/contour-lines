@@ -731,7 +731,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     data.append(row('Growth points needed',growth.remaining),row('Base weekly growth before service',growth.weeklyDecay?'−'+growth.weeklyDecay:'+'+growth.naturalGrowth),
       row('Waiting two weeks or more',growth.overdue),
       row('Queue penalty · now / last week','−'+growth.queuePenalty+' / −'+growth.lastQueuePenalty),
-      node('small','Each six riders waiting at least two weeks cost one growth point per week, up to four.'),
+      node('small','Each twelve riders waiting at least two weeks cost one growth point per week, up to two.'),
       row('Goods growth last week','+'+growth.serviceGrowth.goods+' pts'),
       row('Passenger growth last week','+'+growth.serviceGrowth.passengers+' pts'),
       row('Passenger arrivals this month',growth.riders));

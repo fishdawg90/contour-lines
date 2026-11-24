@@ -81,7 +81,7 @@ function townWeeklyDemand(town,cargo,level,homeCount,reachableHomes=homeCount){
   if(!town.starterGoods)return cargo==='timber'?Math.ceil(Math.min(homeCount,reachableHomes)/2):0;
   const full=fullTownDemand(town,cargo,level,homeCount);
   const share=Math.max(0,Math.min(1,reachableHomes/homeCount));
-  return Math.ceil(full*share*(cargo==='timber'?.5:1));
+  return Math.ceil(full*share*(goods[cargo]?.[2]===0?.5:1));
 }
 function timberStorageCapacity(town,level,homeCount){
   // Keep room for vehicle-sized deliveries as households use less timber.
