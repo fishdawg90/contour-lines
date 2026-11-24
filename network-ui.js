@@ -339,6 +339,11 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       row('Vehicle distance',s.km.toFixed(2)+' km'),row(r.local?'Setup cost':rail?'Track construction':'Road construction',r.capital?cash(r.capital):rail?'—':'Legacy road'),
       row(rail?'Queued on track':'Queued on road',queued),row('Waiting to unload',blocked),row('Waiting to fill',filling),row('Finishing before removal',retiring),
       row(freight?'Waiting for orders':'Waiting for riders',waiting));
+    if(s.lastDelivery){
+      const {elapsed,bonus,pay}=s.lastDelivery;
+      data.append(node('h3','Last paid delivery'),row(r.local?'Average time aboard':'Time aboard',
+        elapsed==null?'—':Math.round(elapsed)+' s'),row('Speed bonus',cash(bonus)),row('Total paid',cash(pay)));
+    }
     if(crossing)data.append(row(rail?'Waiting at level crossings':'Waiting for trains at crossings',crossing));
     if(r.local){
       data.append(row('Loop length',Math.round(r.length*40)+' m'),row('Stops',r.stops.length),

@@ -1,11 +1,13 @@
-window.createTownEditor=function({getValley,commitRoad,commitLoop,complete,ground}){
+window.createTownEditor=function({getValley,commitRoad,commitLoop,complete,ground,heightScale=5/.23}){
   const el=id=>document.getElementById(id);
   const dialog=el('townEditor'),canvas=el('teMap'),ctx=canvas.getContext('2d');
   const modes={roads:'Build town road',bus:'New local bus loop',delivery:'New delivery loop'};
   let mode,city,graph,points,bend,preview,pan,scale,press,hubs,services,editing;
+  let crossingChoices={},crossingMarkers=[],selectedCrossing;
   let width=1,height=1;
   const screen=p=>[width/2+(p.x-pan.x)*scale,height/2+(p.y-pan.y)*scale];
   const world=(x,y)=>({x:pan.x+(x-width/2)/scale,y:pan.y+(y-height/2)/scale});
+  const crossingScreen=p=>{const [x,y]=screen(p);return {x,y};};
   const geometry=p=>p&&({x:p.x,y:p.y,z:p.z});
   const rates={roads:4600,bus:8200,delivery:8200};
   function coords(event){
@@ -98,20 +100,34 @@ window.createTownEditor=function({getValley,commitRoad,commitLoop,complete,groun
       if(Math.hypot(x-city.x,y-city.y)>13||valley.wet(x,y,.25))return {issue:'Keep the road on dry ground within the town area.'};
       sample.push({x,y,z:a.z+(b.z-a.z)*t});
     }
-    const path=[],length=addLeg(path,sample);
+    const base=[],length=addLeg(base,sample);
     const lots=valley.market.homes(city);
     if(length<.65)return {issue:'Leave at least 26 m between the endpoints.'};
-    if(path.some(p=>lots.some(l=>ContourTown.gap(l,p)<l.radius+.21)))return {issue:'Curve the road away from occupied buildings.'};
-    if(path.some(p=>Math.abs(p.z-ground(p.x,p.y))>.18))return {issue:'This terrain needs a gentler alignment.'};
-    if(Math.abs(a.z-b.z)*25>length*40*.12)return {issue:'Keep the road grade under 12%.'};
-    return {city:city.id,path,length,cost:Math.round(rates.roads+length*7200)};
+    if(base.some(p=>lots.some(l=>ContourTown.gap(l,p)<l.radius+.21)))return {issue:'Curve the road away from occupied buildings.',path:base};
+    if(base.some(p=>Math.abs(p.z-ground(p.x,p.y))>.18))return {issue:'This terrain needs a gentler alignment.',path:base};
+    if(Math.abs(a.z-b.z)*heightScale>length*40*.12)return {issue:'Keep the road grade under 12%.',path:base};
+    const design=ContourGradeSeparation.design({mode:'road',points:base.map(p=>({...p,d:p.distance})),valley,
+      heightScale,choices:crossingChoices,startClearance:.45,endClearance:.45,maxGrade:12});
+    const path=[];
+    addLeg(path,design.points);
+    const cost=Math.round(rates.roads+length*7200+design.cost);
+    return {city:city.id,path,length,cost,crossingCost:design.cost,crossings:design.crossings,issue:design.issue};
   }
   function update(){
     const valley=getValley();
     preview=mode==='roads'?planRoad():planLoop();
+    const editor=ContourRouteEditor;
+    crossingMarkers=mode==='roads'?editor.crossingEntries([preview]):[];
+    const current=editor.crossingControls(el('teCrossings'),crossingMarkers,selectedCrossing,
+      entry=>{selectedCrossing=entry.key;update();},(entry,choice)=>{
+        selectedCrossing=entry.key;crossingChoices[entry.id]=choice;update();
+      },heightScale);
+    selectedCrossing=current?.key;
     const overBudget=preview.cost>valley.market.state.cash;
     el('teHelp').textContent=preview.issue||(overBudget?'Insufficient funds for this plan.':mode==='roads'?'Drag the middle handle to curve the road, then build.':'Tap streets to add stops. Tap a placed stop to remove it.');
-    el('teStatus').textContent=preview.issue?'':Math.round(preview.length*40)+' m · '+preview.cost.toLocaleString('en-GB')+' cr'+(preview.reached?' · '+preview.reached.size+' homes':'');
+    el('teStatus').textContent=preview.issue?'':Math.round(preview.length*40)+' m · '+preview.cost.toLocaleString('en-GB')+' cr'+
+      (preview.crossingCost?' · incl. '+Math.round(preview.crossingCost).toLocaleString('en-GB')+' cr for crossing work':'')+
+      (preview.reached?' · '+preview.reached.size+' homes':'');
     el('teConfirm').disabled=!!preview.issue||overBudget;
     draw();
   }
@@ -134,6 +150,13 @@ window.createTownEditor=function({getValley,commitRoad,commitLoop,complete,groun
       line(road.nodes,'#f2e6bf',Math.max(4,.46*scale));
       line(road.nodes,'#53615a',Math.max(2,.31*scale));
     }
+    if(mode==='roads')for(const track of Object.values(valley.transport.railTracks??{})){
+      const lines=window.ContourRail?.trackLines(track,valley.transport).lines??[track];
+      for(const trackLine of lines){
+        line(trackLine.points,'#d4c2a5',Math.max(3,.21*scale));
+        line(trackLine.points,'#51445e',Math.max(1.5,.10*scale));
+      }
+    }
     const hub=mode!=='roads'&&selectedHub();
     const served=new Set(hub?valley.market.catchment(hub,city,mode,el('teCargo').value).map(l=>l.id):[]);
     for(const lot of lots){
@@ -142,6 +165,13 @@ window.createTownEditor=function({getValley,commitRoad,commitLoop,complete,groun
       ctx.fillRect(x-side/2,y-side/2,side,side);
     }
     if(preview.path)line(preview.path,mode==='roads'?'#fdf5da':'#fbca6d',Math.max(3,.19*scale));
+    if(mode==='roads'&&preview.path){
+      for(let i=1;i<preview.path.length;i++){
+        const a=preview.path[i-1],b=preview.path[i];
+        if(a.bridge&&b.bridge)line([a,b],'#7853a7',Math.max(3,.19*scale));
+        if(a.tunnel&&b.tunnel)line([a,b],'#44668a',Math.max(3,.19*scale));
+      }
+    }
     points.forEach((p,i)=>dot(p,'#31576d',i+1));
     if(mode!=='roads')for(const [key,station] of hubs){
       const kinds=services.get(key),freight=cargoOptions(key).length>0,r=station===hub?15:11;
@@ -150,12 +180,13 @@ window.createTownEditor=function({getValley,commitRoad,commitLoop,complete,groun
         kinds?.has('bus')?(freight?'P+':'P'):freight?'F':'•',r);
     }
     if(mode==='roads'&&points.length===2)dot(bend??{x:(points[0].x+points[1].x)/2,y:(points[0].y+points[1].y)/2},'#9b653d','↔',11);
+    ContourRouteEditor.drawCrossingMarkers(ctx,crossingScreen,crossingMarkers,selectedCrossing);
   }
   function chooseCity(){
     const valley=getValley();
     city=valley.towns.find(c=>c.id===el('teCity').value);
     graph=ContourTown.getGraph(valley,city);
-    points=[];bend=null;pan={x:city.x,y:city.y};
+    points=[];bend=null;crossingChoices={};selectedCrossing=undefined;pan={x:city.x,y:city.y};
     scale=Math.min(52,Math.max(19,canvas.clientWidth/17));
     hubs=ContourTown.hubStations(valley,city);
     services=mode==='roads'?new Map():ContourTown.hubServices(valley,valley.market.kind);
@@ -203,7 +234,12 @@ window.createTownEditor=function({getValley,commitRoad,commitLoop,complete,groun
     if(!press?.panned){
       const at=world(...coords(event)),snapped=graph.nearest(at,17/scale);
       if(mode==='roads'){
-        if(points.length===2){points=[];bend=null;}
+        const crossing=ContourRouteEditor.hitCrossing(crossingScreen,crossingMarkers,crossingScreen(at));
+        if(crossing){selectedCrossing=crossing.key;press=null;update();return;}
+        if(snapped?.gradeSeparation&&(snapped.bridge||snapped.tunnel)){
+          el('teHelp').textContent='Attach to a street beyond the bridge or tunnel.';press=null;return;
+        }
+        if(points.length===2){points=[];bend=null;crossingChoices={};selectedCrossing=undefined;}
         if(snapped)points.push(geometry(snapped));
         else if(points.length){at.z=ground(at.x,at.y);points.push(at);}
       }else{
@@ -214,7 +250,7 @@ window.createTownEditor=function({getValley,commitRoad,commitLoop,complete,groun
         if(!selectedHub()){press=null;return;}
         const index=points.findIndex(p=>ContourTown.gap(p,at)*scale<12);
         if(index>=0)points.splice(index,1);
-        else if(snapped&&!points.includes(snapped)&&points.length<12)points.push(snapped);
+        else if(snapped&&!snapped.tunnel&&!points.includes(snapped)&&points.length<12)points.push(snapped);
       }
       update();
     }
@@ -224,7 +260,7 @@ window.createTownEditor=function({getValley,commitRoad,commitLoop,complete,groun
   canvas.onwheel=event=>{event.preventDefault();scale=Math.max(10,Math.min(90,scale*Math.exp(-event.deltaY*.0017)));draw();};
   el('teZoomIn').onclick=()=>{scale=Math.min(90,scale*1.25);draw();};
   el('teZoomOut').onclick=()=>{scale=Math.max(10,scale*.8);draw();};
-  el('teUndo').onclick=()=>{points.pop();bend=null;update();};
+  el('teUndo').onclick=()=>{points.pop();bend=null;crossingChoices={};selectedCrossing=undefined;update();};
   el('teCity').onchange=chooseCity;
   el('teHub').onchange=()=>{updateCargo();update();};
   el('teCargo').onchange=update;
@@ -232,7 +268,9 @@ window.createTownEditor=function({getValley,commitRoad,commitLoop,complete,groun
   el('teConfirm').onclick=()=>{
     update();
     if(el('teConfirm').disabled)return;
-    if(mode==='roads')commitRoad(preview);else commitLoop(preview,editing);
+    if(mode==='roads'){
+      if(commitRoad({...preview,crossings:ContourRouteEditor.crossingRecords(crossingMarkers)})===false)return;
+    }else commitLoop(preview,editing);
     dialog.close();complete();
   };
   new ResizeObserver(draw).observe(canvas);

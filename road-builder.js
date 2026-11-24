@@ -14,10 +14,12 @@ const lotKey = (city, lot) => city.id + ':' + lot.id;
 const along = (p, x, y, n) => ({x:p.x + x * n, y:p.y + y * n});
 const snap = n => Math.round(n * 4) / 4;
 
-function nearest(p, points) {
+function nearest(p, points, surfaceOnly=false) {
   let best = {distance:Infinity};
   for (let i = 1; i < points.length; i++) {
-    const a = points[i-1], b = points[i], dx = b.x-a.x, dy = b.y-a.y;
+    const a = points[i-1], b = points[i];
+    if(surfaceOnly&&a.tunnel&&b.tunnel)continue;
+    const dx = b.x-a.x, dy = b.y-a.y;
     const den = dx*dx + dy*dy;
     if (!den) continue;
     const t = clamp(((p.x-a.x)*dx+(p.y-a.y)*dy)/den, 0, 1);
@@ -26,6 +28,8 @@ function nearest(p, points) {
   }
   return best;
 }
+
+const nearestExposed=(p,path)=>nearest(p,path,true).distance;
 
 function curve(points,startHeading,endHeading) {
   const out = [];
@@ -397,14 +401,101 @@ function endpointControls(valley,places,origin,destination,onSelect){
   select.onchange=()=>onSelect(places.find(place=>place.id===select.value));
   return [select];
 }
+const crossingNames={level:'At level',bridge:'Over',tunnel:'Under'};
+function crossingEntries(sections){
+  return sections.flatMap((section,index)=>(section?.crossings??[]).map(crossing=>({
+    ...crossing,section:index,key:index+':'+crossing.id,
+  }))).map((entry,i)=>({...entry,number:i+1}));
+}
+function crossingRecords(crossings){
+  return (crossings??[]).map(({options,issue,cost,...entry})=>entry);
+}
+function crossingControls(container,entries,selection,select,apply,heightScale){
+  container.hidden=!entries.length;
+  if(!entries.length){container.replaceChildren();return null;}
+  const active=entries.find(entry=>entry.key===selection)??entries[0];
+  const focused=container.contains(document.activeElement)?document.activeElement:null;
+  const picker=document.createElement('select');
+  picker.setAttribute('aria-label','Crossing');
+  picker.replaceChildren(...entries.map(entry=>new Option('Crossing '+entry.number+' · '+entry.name,entry.key)));
+  picker.value=active.key;
+  picker.onchange=()=>select(entries.find(entry=>entry.key===picker.value));
+  const group=document.createElement('div');
+  group.className='crossingChoices';
+  group.setAttribute('role','group');
+  group.setAttribute('aria-label','Crossing treatment');
+  for(const choice of active.options??Object.keys(crossingNames)){
+    if(!crossingNames[choice])continue;
+    const button=document.createElement('button');
+    button.type='button';
+    button.dataset.crossingChoice=choice;
+    button.textContent=crossingNames[choice];
+    button.setAttribute('aria-pressed',String(active.choice===choice));
+    button.onclick=()=>apply(active,choice);
+    group.append(button);
+  }
+  const status=document.createElement('p');
+  status.className='crossingNote'+(active.issue?' warning':'');
+  const separated=active.choice!=='level'&&Number.isFinite(active.z)&&Number.isFinite(active.otherZ)&&Number.isFinite(heightScale);
+  const metrics=separated?[(Math.abs(active.z-active.otherZ)*heightScale).toFixed(1)+' m clearance',
+    active.cost?Math.round(active.cost).toLocaleString('en-GB')+' cr construction':''].filter(Boolean).join(' · '):'';
+  status.textContent=active.issue||metrics||'Choose how the new alignment crosses '+active.name+'.';
+  container.replaceChildren(picker,group,status);
+  if(focused?.tagName==='SELECT')picker.focus({preventScroll:true});
+  else if(focused?.dataset.crossingChoice){
+    [...group.children].find(button=>button.dataset.crossingChoice===focused.dataset.crossingChoice)?.focus({preventScroll:true});
+  }
+  return active;
+}
+function drawCrossingMarkers(ctx,screen,entries,selection){
+  ctx.save();
+  for(const entry of entries){
+    const p=screen(entry),active=entry.key===selection;
+    ctx.beginPath();ctx.arc(p.x,p.y,active?11:9,0,Math.PI*2);
+    ctx.fillStyle=entry.issue?'#ac4c36':entry.choice==='bridge'?'#7452a0':entry.choice==='tunnel'?'#405f85':'#a46633';
+    ctx.fill();ctx.strokeStyle=active?'#fff6ce':'#f5dda2';ctx.lineWidth=active?2.5:1.4;ctx.stroke();
+    ctx.textAlign='center';ctx.font='bold 11px system-ui';ctx.fillStyle='#fff';ctx.fillText(entry.number,p.x,p.y+4);
+  }
+  ctx.restore();
+}
+function hitCrossing(screen,entries,point){
+  return entries.map(entry=>({entry,gap:distance(point,screen(entry))}))
+    .filter(item=>item.gap<=14).sort((a,b)=>a.gap-b.gap)[0]?.entry;
+}
+function drawCrossingProfile(context,g,x,y,length,crossings){
+  context.save();
+  for(const entry of crossings){
+    if(!Number.isFinite(entry.d)||!Number.isFinite(entry.otherZ))continue;
+    const u=x(entry.d/length);
+    context.beginPath();context.setLineDash([3,3]);context.moveTo(u,g.top);context.lineTo(u,g.bottom);
+    context.strokeStyle='#7e614d88';context.lineWidth=1;context.stroke();context.setLineDash([]);
+    context.beginPath();context.arc(u,y(entry.otherZ),3,0,Math.PI*2);context.fillStyle='#a46633';context.fill();
+    context.font='bold 10px system-ui';context.textAlign='center';context.fillText(entry.number,u,g.top+8);
+  }
+  context.restore();
+}
+function crossingElevation(points,d){
+  let left=0,right=points.length-1;
+  while(right-left>1){
+    const middle=(left+right)>>1;
+    if(points[middle].d<=d)left=middle;else right=middle;
+  }
+  const a=points[left],b=points[right];
+  return lerp(a.z,b.z,clamp((d-a.d)/(b.d-a.d||1),0,1));
+}
+
 window.ContourRouteEditor={drawDirection,endpointControls,createTerrainPainter,createStationPainter,drawTownMap,drawProfileBase,drawProfileCurve,stationFootprint,
-  hitsStation,stationRoadConflict,protectedRoad,cityRoadRows,builtLots,tracePath,pointerAt,bindProfileEditor};
+  hitsStation,stationRoadConflict,protectedRoad,cityRoadRows,builtLots,tracePath,pointerAt,bindProfileEditor,crossingControls,crossingEntries,crossingRecords,drawCrossingMarkers,hitCrossing,drawCrossingProfile,nearestExposed};
 
 window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightScale,draftKey,stationFaces,begin,commit,upgradeStation,finish}) {
   const $=id=>document.getElementById(id);
   const root=$('roadBuilder'), map=$('rbMap'), ctx=map.getContext('2d'), section=$('rbProfile');
   const lens=$('rbProfileLens'),lensCanvas=$('rbProfileLensCanvas');
   const renderTerrain=createTerrainPainter();
+  const crossingPanel=document.createElement('div');
+  crossingPanel.className='editorCrossings';crossingPanel.hidden=true;
+  $('rbCurveTools').before(crossingPanel);
+  let crossingMarkers=[],selectedCrossing=null;
   let stationEdit=null, draft=null, step=0, selected=-1, deleteMode=false, dragging=null, pressed=null, preview=null;
   let frame=0, scaleHint=1, removalNote='', undo=[], redo=[], gestureEdit=null;
   const cursor=new Map();
@@ -901,14 +992,15 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     let cut=sections.reduce((sum,item)=>sum+item.cut,0),fill=sections.reduce((sum,item)=>sum+item.fill,0);
     const totalNew=sections.reduce((sum,item)=>sum+item.length,0);
     const waterLength=sections.reduce((sum,item)=>sum+item.waterLength,0);
+    const crossingCost=sections.reduce((sum,item)=>sum+(item.crossingCost??0),0);
     const maxGrade=Math.max(...sections.map(item=>item.maxGrade)),maxEarthwork=Math.max(...sections.map(item=>item.maxEarthwork));
     const roadPoints=sections.flatMap(item=>item.path);
     for(const s of newBays){
       const station=stationEarthwork(s);cut+=station.cut;fill+=station.fill;
     }
     const lots=houses().filter(l=>newBays.some(s=>impactedByStation(l,s))||
-      sections.some(({path})=>nearest(l,path).distance<(l.radius??.33)+ROAD_HALF_WIDTH));
-    const cost=valley.market.vehiclePrice+estimateCost({length:totalNew,cut,fill,waterLength,stations:newBays.length,buildings:lots.length,streets:draft.deleted.length});
+      sections.some(({path})=>nearestExposed(l,path)<(l.radius??.33)+ROAD_HALF_WIDTH));
+    const cost=valley.market.vehiclePrice+crossingCost+estimateCost({length:totalNew,cut,fill,waterLength,stations:newBays.length,buildings:lots.length,streets:draft.deleted.length});
     const out=roadPoints.some(p=>p.x<=bounds.west||p.x>=bounds.east||p.y<=bounds.north||p.y>=bounds.south);
     const otherStations=valley.builtStations.filter(s=>!draft.stations.some(p=>(p.existingBay||p.shared)&&choiceKey(p)===choiceKey(s)))
       .concat(draft.stations.flatMap(s=>layoutBays(s).filter(bay=>bay.id!==(s.selectedBay??'1'))));
@@ -939,21 +1031,21 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
   }
   let sectionCache=new Map();
   function cachedSection(from,to,leave,enter,edits,startGrade=0,endGrade=0){
-    const key=JSON.stringify([from,to,leave,enter,edits.handles,edits.vips,startGrade,endGrade]);
+    const key=JSON.stringify([from,to,leave,enter,edits.handles,edits.vips,startGrade,endGrade,edits.crossingChoices,draft.deleted]);
     if(sectionCache.has(key))return sectionCache.get(key);
     const section=designSection(from,to,leave,enter,edits,startGrade,endGrade);
     if(sectionCache.size>=32)sectionCache.delete(sectionCache.keys().next().value);
     sectionCache.set(key,section);
     return section;
   }
-  function designSection(start,end,startHeading,endHeading,edits,startGrade=0,endGrade=0,railApproaches){
+  function designSection(start,end,startHeading,endHeading,edits,startGrade=0,endGrade=0,railApproaches,excluded){
     const valley=getValley();
     if(distance(start,end)<1e-5)return {path:[start],length:0,maxGrade:0,cut:0,fill:0,waterLength:0,maxEarthwork:0,
       issue:Math.abs(start.z-end.z)>.001?'Leave room to connect roads at different heights.':''};
     const back=railApproaches?.[1],forward=railApproaches?.[0];
     const guide=forward?[{...along(start,startHeading.x,startHeading.y,forward),direction:startHeading}]:[];
     const arrival=back?[{...along(end,-endHeading.x,-endHeading.y,back),direction:endHeading}]:[];
-    const path=curve([start,...guide,...edits.handles,...arrival,end],startHeading,endHeading);
+    let path=curve([start,...guide,...edits.handles,...arrival,end],startHeading,endHeading);
     const gradeLimit=railApproaches?4:MAX_GRADE;
     let length=0;
     for(let i=0;i<path.length;i++){
@@ -965,29 +1057,39 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     }
     const bridgeClearance=.20;
     const levels=[{z:start.z},...edits.vips,{z:end.z}];
-    const design=verticalDesign(levels,length,heightScale,startGrade,endGrade,railApproaches);
-    const maxGrade=Math.max(...design.grades.map(g=>Math.abs(g)))*heightScale/WORLD_METRES*100;
+    const baseDesign=verticalDesign(levels,length,heightScale,startGrade,endGrade,railApproaches);
+    for(const p of path)p.z=baseDesign.elevation(p.d);
+    const crossings=window.ContourGradeSeparation?.design({mode:railApproaches?'rail':'road',points:path,valley,heightScale,
+      choices:edits.crossingChoices,excluded:excluded??new Set(draft?.deleted??[]),
+      startClearance:baseDesign.approaches[0],endClearance:baseDesign.approaches[1]});
+    path=crossings?.points??path;
+    const design=crossings?.crossings.length?{...baseDesign,elevation:d=>crossingElevation(path,d)}:baseDesign;
+    const maxGrade=crossings?.maxGrade??Math.max(...design.grades.map(g=>Math.abs(g)))*heightScale/WORLD_METRES*100;
     let cut=0,fill=0,waterLength=0,maxEarthwork=0,previous=null;
     for(let i=0;i<path.length;i++){
       const p=path[i];
-      p.z=design.elevation(p.d);
-      p.bridge=p.water||(valley.biome?.(p.x,p.y)==='western'&&p.z-p.ground>=.48);
+      p.ground??=(valley.designGround??meshGround)(p.x,p.y);
+      p.water??=valley.wet(p.x,p.y);
+      const naturalBridge=p.water||(valley.biome?.(p.x,p.y)==='western'&&p.z-p.ground>=.48);
+      p.bridge=!p.tunnel&&(p.bridge||naturalBridge);
+      p.waterBridge=naturalBridge&&!p.tunnel&&!p.gradeSeparation;
       const next=path[Math.min(i+1,path.length-1)],prev=path[Math.max(i-1,0)];
       const n=distance(prev,next)||1;p.dx=(next.x-prev.x)/n;p.dy=(next.y-prev.y)/n;
       const ds=(i?p.d-path[i-1].d:0)*WORLD_METRES;
-      p.works=p.bridge?{left:FORMATION,right:FORMATION,cut:0,fill:0}:sectionEarthwork(valley.designGround??meshGround,p,heightScale);
+      p.works=p.bridge||p.tunnel?{left:FORMATION,right:FORMATION,cut:0,fill:0}:sectionEarthwork(valley.designGround??meshGround,p,heightScale);
       maxEarthwork=Math.max(maxEarthwork,(p.works.left+p.works.right)*WORLD_METRES);
       if(previous){
-        if(p.bridge||path[i-1].bridge)waterLength+=ds*(p.bridge&&path[i-1].bridge?1:.5);
+        if(p.waterBridge||path[i-1].waterBridge)waterLength+=ds*(p.waterBridge&&path[i-1].waterBridge?1:.5);
         cut+=(p.works.cut+previous.cut)*.5*ds*WORLD_METRES*heightScale;
         fill+=(p.works.fill+previous.fill)*.5*ds*WORLD_METRES*heightScale;
       }
       previous=p.works;
     }
-    const issue=maxGrade>gradeLimit+.001?'Reduce the steepest grade to '+gradeLimit+'% or less.':
+    const issue=crossings?.issue||(maxGrade>gradeLimit+.001?'Reduce the steepest grade to '+gradeLimit+'% or less.':
       !design.fits?'Shorten a radius, space out the VIPs, or reduce the grade change.':
-      path.some(p=>p.water&&p.z<bridgeClearance-.001)?'Raise the profile so the bridge clears the water.':'';
-    return {path,levels,design,length,maxGrade,cut,fill,waterLength,maxEarthwork,issue};
+      path.some(p=>p.water&&!p.tunnel&&p.z<bridgeClearance-.001)?'Raise the profile so the bridge clears the water.':'');
+    return {path,levels,design,length,maxGrade,cut,fill,waterLength,maxEarthwork,issue,
+      crossings:crossings?.crossings??[],crossingCost:crossings?.cost??0};
   }
 
   function stationEarthwork(s){
@@ -1217,7 +1319,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
       const {path}=section;if(path.length<2)continue;
       const active=!reuseStretch()||index===(draft.link??0);
       for(let i=1;i<path.length;i++){
-        const a=path[i-1],b=path[i];if(a.bridge||b.bridge)continue;
+        const a=path[i-1],b=path[i];if(a.bridge||b.bridge||a.tunnel||b.tunnel)continue;
         for(const [side,sign] of [['left',-1],['right',1]]){
           const aw=a.works[side],bw=b.works[side],offset=(p,n)=>along(p,-p.dy,p.dx,sign*n);
           const middle=offset(b,(FORMATION+bw)/2),g=(valley.designGround??meshGround)(middle.x,middle.y);
@@ -1226,7 +1328,10 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
       }
       line(path,'#f9e2a7',Math.max(6,.49*scaleHint));
       line(path,section.issue?'#a8493c':active?'#1f6c79':'#526d86',Math.max(3,.34*scaleHint));
-      for(let i=1;i<path.length;i++)if(path[i].bridge)line(path.slice(i-1,i+1),'#704bac',4);
+      for(let i=1;i<path.length;i++){
+        if(path[i].bridge)line(path.slice(i-1,i+1),'#704bac',4);
+        if(path[i].tunnel){ctx.setLineDash([4,3]);line(path.slice(i-1,i+1),'#3c4e74',4);ctx.setLineDash([]);}
+      }
     }
     for(const access of valley.transport.stationAccesses??[]){
       if(!stationEdit||access.baseKey!==choiceKey(stationEdit.base))line(access.points,'#6e9c79',Math.max(2,.30*scaleHint));
@@ -1257,12 +1362,15 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
       }
       if(draft.pick?.start)dot(draft.pick.start,16,'#246552','A');
     }
+    if(step>=3)drawCrossingMarkers(ctx,screen,crossingMarkers,selectedCrossing);
     if(step===3&&!$('rbProfileWrap').hidden&&preview?.design)drawProfile();
     drawProfileLens();
   }
 
   function profileScale(){
-    const values=preview.path.flatMap(p=>[p.ground,p.z]).concat(preview.levels.map(p=>p.z));
+    const crossingLevels=crossingMarkers.filter(entry=>entry.section===(reuseStretch()?draft.link??0:0))
+      .map(entry=>entry.otherZ).filter(Number.isFinite);
+    const values=preview.path.flatMap(p=>[p.ground,p.z]).concat(preview.levels.map(p=>p.z),crossingLevels);
     const min=profileDrag?.scale.min??Math.min(...values)-.12;
     const max=profileDrag?.scale.max??Math.max(...values)+.20;
     const w=section.clientWidth,h=section.clientHeight;
@@ -1284,7 +1392,8 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
       c.beginPath();c.arc(x(p.d/preview.length),y(p.z),station?3:alignment().vip===i-1?7:5,0,Math.PI*2);
       c.fillStyle=station?'#706c60':alignment().vip===i-1?'#674e97':'#285e73';c.fill();
     });
-    c.fillText('0',g.left,g.h-5);
+    drawCrossingProfile(c,g,x,y,preview.length,crossingMarkers.filter(entry=>entry.section===(reuseStretch()?draft.link??0:0)));
+    c.fillStyle='#44594e';c.fillText('0',g.left,g.h-5);
     c.textAlign='right';c.fillText((preview.length*WORLD_METRES/1000).toFixed(2)+' km',g.right,g.h-5);c.textAlign='left';
   }
   function drawVerticalLine(context,x,y,start,end,samples,width){
@@ -1349,9 +1458,17 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     saveDraft();
     $('rbUpgradeTools').hidden=!stationEdit;
     $('rbCargo').hidden=true;
-    if(stationEdit){refreshUpgrade();return;}
+    if(stationEdit){crossingPanel.hidden=true;crossingMarkers=[];refreshUpgrade();return;}
     $('rbUndo').hidden=$('rbRedo').hidden=false;
     preview=step>=3?profile():null;
+    crossingMarkers=crossingEntries(preview?.sections??[]);
+    if(step===3&&!draft.pick){
+      const active=crossingControls(crossingPanel,crossingMarkers,selectedCrossing,selectCrossing,(entry,choice)=>{
+        selectCrossing(entry,false);
+        edit(()=>{(alignment().crossingChoices??={})[entry.id]=choice;});
+      },heightScale);
+      selectedCrossing=active?.key;
+    }else crossingPanel.hidden=true;
     const [a,b]=draft.picks;
     const station=step===1||step===2?draft.stations[step-1]:null;
     $('rbStep').textContent=(step+1)+'/5';
@@ -1489,10 +1606,24 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
       issue='';
       help=draft.pick.start?'Tap the end of the stretch in the direction of travel.':'Tap the start of the stretch you want to reuse.';
     }
+    if(crossingMarkers.length)$('rbSummary').textContent+=' · '+crossingMarkers.length+(crossingMarkers.length===1?' crossing':' crossings');
     $('rbHelp').textContent=removalNote||issue||help;
     $('rbHelp').classList.toggle('warning',Boolean(issue));
     $('rbNext').disabled=(step===0&&draft.picks.length<2)||Boolean(issue)||Boolean(step===3&&draft.pick);
     request();
+  }
+
+  function selectCrossing(entry,update=true){
+    if(!entry)return;
+    selectedCrossing=entry.key;
+    if(reuseStretch()&&entry.section!==(draft.link??0)){
+      draft.link=entry.section;
+      selected=-1;
+    }
+    if(update){
+      refresh();
+      crossingPanel.scrollIntoView({block:'nearest'});
+    }
   }
 
   function snapshot(){return {draft:structuredClone(draft),step,selected};}
@@ -1567,8 +1698,8 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     else{
       append(first);append(preview.path,true);append(last);
     }
-    const points=routePoints.map(({x,y,z,dx,dy,bridge,water})=>
-      ({x,y,z,dx,dy,bridge,water:water??getValley().wet(x,y)}));
+    const points=routePoints.map(({x,y,z,dx,dy,bridge,tunnel,gradeSeparation,water})=>
+      ({x,y,z,dx,dy,bridge,tunnel,gradeSeparation,water:water??getValley().wet(x,y)}));
     const approachLengths=draft.stations.map((station,i)=>{
       if(!network)return Math.min(1.5,routeLength(routeStub(station)));
       if(reuseStretch())return Math.min(1.5,routeLength(routeStub(station)));
@@ -1585,7 +1716,8 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
         const {x,y,z,nx,ny,place,name,millBay}=s;
         return [choiceKey(s),{bays:[{x,y,z,nx,ny,place,name,millBay,id:'1',bayUse:'both'},s.sideBay],nextId:3}];
       })),
-      points,approachLengths,roadKeys:network?.keys,roadSections};
+      points,approachLengths,roadKeys:network?.keys,roadSections,
+      crossings:crossingRecords(crossingMarkers)};
   }
 
   function chooseStation(station){
@@ -1697,6 +1829,8 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
       return;
     }
     if(step===3&&draft.pick){pickRoadPoint(p);return;}
+    const crossing=step===3&&hitCrossing(screen,crossingMarkers,position(e));
+    if(crossing){selectCrossing(crossing);return;}
     if(step===3&&reuseStretch()&&preview?.sections){
       const nearestLink=preview.sections.map(({path})=>nearest(p,path).distance);
       const index=nearestLink.indexOf(Math.min(...nearestLink));
@@ -1748,6 +1882,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     }
     if(stationEdit)return;
     if(step===3&&!draft.pick){
+      if(hitCrossing(screen,crossingMarkers,p))return;
       const tie=tieHandles().map(item=>({...item,gap:distance(p,screen(item.point))}))
         .filter(item=>item.gap<=22).sort((a,b)=>a.gap-b.gap)[0];
       if(tie){
@@ -1879,7 +2014,10 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
         const position=approach+vip.f*run,f=(position-low)/(high-low);
         return f>.025&&f<.975?[{...vip,f}]:[];
       });
-      return {handles,vips,vip:-1};
+      const crossingChoices=Object.fromEntries((section.crossings??[])
+        .filter(entry=>entry.d>low&&entry.d<high&&edits.crossingChoices?.[entry.id])
+        .map(entry=>[entry.id,edits.crossingChoices[entry.id]]));
+      return {handles,vips,vip:-1,crossingChoices};
     });
   }
   function pickRoadPoint(p){
@@ -2246,9 +2384,9 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
   new ResizeObserver(request).observe(map);
 
   return {
-    designRailSection(from,to,leave,enter,edits){
+    designRailSection(from,to,leave,enter,edits,excluded){
       const stationApproach=s=>s.kind?(s.platformLength??2.4)*(s.terminal?1:.5):0;
-      return designSection(from,to,leave,enter,edits,0,0,[stationApproach(from),stationApproach(to)]);
+      return designSection(from,to,leave,enter,edits,0,0,[stationApproach(from),stationApproach(to)],excluded);
     },
     openStation(base,bayId){
       $('rbBayOptions').open=false;

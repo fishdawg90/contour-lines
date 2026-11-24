@@ -446,7 +446,7 @@
     const lateralSlope=(offset(local+.01)-offset(local-.01))/.02;
     const yaw=Math.atan2((dy+dx*lateralSlope)*direction,(dx-dy*lateralSlope)*direction);
     return {x:a.x+(b.x-a.x)*f-dy*lateral,y:a.y+(b.y-a.y)*f+dx*lateral,z:a.z+(b.z-a.z)*f,
-      yaw,angle:yaw,pitch:Math.atan2((b.z-a.z)*direction,span),direction};
+      tunnel:Boolean((f<.5?a:b).tunnel),yaw,angle:yaw,pitch:Math.atan2((b.z-a.z)*direction,span),direction};
   }
   window.ContourRail={locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trainSpan};
 })();

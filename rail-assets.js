@@ -137,7 +137,7 @@
         const lip=side*ballast;
         face([p(lip,bridge?-.087:-.012),q(lip,bridge?-.087:-.012),q(lip,.023),p(lip,.023)],bridge?'#766b5f':'#807563');
       }
-      if(bridge&&Math.floor(accumulated/1.9)!==Math.floor((accumulated+length)/1.9)){
+      if(bridge&&!a.gradeSeparation&&!b.gradeSeparation&&Math.floor(accumulated/1.9)!==Math.floor((accumulated+length)/1.9)){
         const z=(a.z+b.z)/2;
         box((a.x+b.x)/2,(a.y+b.y)/2,.012,.21,ballast*1.1,Math.max(.01,z-.095),'#887d6b');
       }

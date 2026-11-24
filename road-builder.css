@@ -47,3 +47,10 @@
 
 #rbStationGates select{min-height:42px;max-width:100%;padding:4px 8px}
 #rbBaySides button:disabled{opacity:.68}
+.editorCrossings{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin:5px 0 7px}
+.editorCrossings[hidden]{display:none!important}
+.editorCrossings .crossingChoices{display:flex;gap:4px;flex-wrap:wrap}
+.editorCrossings button,.editorCrossings select{min-height:38px;padding:4px 8px;border-radius:8px;background:#35433b;color:var(--pale,#eef4e7);border:1px solid var(--edge,#506456);font:500 13px/1.2 system-ui}
+.editorCrossings button[aria-pressed=true]{background:#47614c;outline:1px solid var(--mint,#c2dcb7)}
+.editorCrossings .crossingNote{flex:1 0 100%;margin:0;font-size:12px;color:#d0decf}
+.editorCrossings .crossingNote.warning{color:#ffd6c6}

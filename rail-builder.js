@@ -78,7 +78,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     <div class="rb-profile rl-profile" id="rlProfile" hidden><canvas aria-label="Track elevation profile. Tap to add a vertical intersection point, then drag it to adjust the grade."></canvas>
       <p class="rl-profile-note" hidden>Existing track elevation. Choose Redraw section to change an unshared alignment.</p>
       <div class="rb-profile-controls"><label>VIP radius <input type="range" aria-label="VIP radius" min="120" max="1200" step="10"><output></output></label><button data-action="removeLevel">Remove VIP</button><button data-action="resetProfile">Reset profile</button></div></div>
-    <div class="rb-editor rl-editor"><p class="rl-stats"></p><div class="rl-impact"></div><div class="rb-options rl-controls"></div></div>
+    <div class="rb-editor rl-editor"><p class="rl-stats"></p><div class="rl-impact"></div><div class="rb-options rl-controls"></div><div class="editorCrossings" hidden></div></div>
     <div class="editorFooter">
       <p class="editorGuide" role="status"></p>
       <div class="rb-actions rl-actions"><button data-action="discard">Discard draft</button><button data-action="back">Back</button><button data-action="next">Continue</button></div>
@@ -87,7 +87,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
   const q=s=>root.querySelector(s), action=name=>q('[data-action="'+name+'"]');
   const map=q('.rl-map canvas'),ctx=map.getContext('2d'), profile=q('.rl-profile canvas'),pc=profile.getContext('2d');
   const renderTerrain=shared.createTerrainPainter();
-  let state,view,undo,redo,routeEdit,stationEdit,preview,issue='',pointer,profileDrag,activeLevel=-1,levelSnapshot,placement;
+  let state,view,undo,redo,routeEdit,stationEdit,preview,issue='',pointer,profileDrag,activeLevel=-1,levelSnapshot,placement,crossingMarkers=[],selectedCrossing;
   const tracks=()=>getValley().transport.railTracks??{};
   const stations=()=>getValley().transport.railStations??Object.fromEntries(
     getValley().transport.routes.filter(r=>r.mode==='rail').flatMap(r=>r.stations.map(s=>[s.id,s])));
@@ -186,10 +186,10 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     }
     return heading(from,to);
   }
-  function align(from,to,edits){
+  function align(from,to,edits,excluded){
     const near=edits.handles[0]??to, far=edits.handles.at(-1)??from;
     const leave=endpointHeading(from,near,edits.redraw),back=endpointHeading(to,far,edits.redraw);
-    return designSection(from,to,leave,{x:-back.x,y:-back.y},edits);
+    return designSection(from,to,leave,{x:-back.x,y:-back.y},edits,excluded);
   }
   function stationIssue(s,index,approachTracks){
     if(!s)return 'Choose a place and set a rail station on the map.';
@@ -267,6 +267,8 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
   }
   function routePreview(){
     const nodes=allNodes(),known=tracks(),legs=[],included=new Set();
+    const excluded=new Set(state.stations.flatMap(s=>stationConflicts(s).map(row=>row.key))
+      .filter(key=>roadsMarked().includes(key)&&!protectedRoad(key)));
     let error='',cost=0,newLength=0,reusedLength=0,maxGrade=0;
     for(const draft of state.legs){
       const from=nodes.get(draft.from),to=nodes.get(draft.to);
@@ -277,14 +279,15 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       }
       const stationRun=s=>s.kind?(s.platformLength??2.4)*(s.terminal?1:.5):0;
       if(!existing&&distance(from,to)<stationRun(from)+stationRun(to)+.35){error='Leave room between track connections.';break;}
-      const section=existing?null:align(from,to,draft);
+      const section=existing?null:align(from,to,draft,excluded);
       const prior=known[draft.redraw];
       const reversed=prior?.to===from.id;
       const track=existing?(draft.double?{...existing,tracks:2}:existing):{
         id:draft.id,from:reversed?to.id:from.id,to:reversed?from.id:to.id,tracks:draft.tracks,
-        points:(reversed?[...section.path].reverse():section.path).map(({x,y,z,dx,dy,bridge,water})=>({
-          x,y,z,dx:reversed?-dx:dx,dy:reversed?-dy:dy,bridge,water
+        points:(reversed?[...section.path].reverse():section.path).map(({x,y,z,dx,dy,bridge,tunnel,gradeSeparation,water})=>({
+          x,y,z,dx:reversed?-dx:dx,dy:reversed?-dy:dy,bridge,tunnel,gradeSeparation,water
         })),
+        crossings:shared.crossingRecords(section.crossings).map(entry=>reversed?{...entry,d:section.length-entry.d}:entry),
       };
       if(track.points.length<2){error='The track needs two different endpoints.';break;}
       const leg={...directed(track,from.id),section};
@@ -310,7 +313,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
         Math.abs(q.x-p.x)<p.halfWidth+.12&&Math.abs(q.y-p.y)<p.halfDepth+.12))?'Curve the track around the industry buildings.':'';
       const regional=getValley().region==='mixed';
       cost+=(section.length*40*(draft.tracks===2?640:415)+section.waterLength*(draft.tracks===2?2370:1620))*(regional?.25:1);
-      cost+=(section.cut*13+section.fill*18)*(regional?.12:1);
+      cost+=(section.cut*13+section.fill*18)*(regional?.12:1)+(section.crossingCost??0);
       maxGrade=Math.max(maxGrade,section.maxGrade);
       newLength+=section.length;
     }
@@ -323,7 +326,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     const impacts=stationsToBuild.map(s=>stationImpact(s,stationTrackCount(s,legs)));
     cost+=stationsToBuild.reduce((sum,s)=>sum+stationConstruction(s),0);
     const lots=[...new Set([...impacts.flatMap(item=>item.lots),...builtLots().filter(lot=>
-      legs.some(({section,track})=>section&&nearest(lot,section.path)<(lot.radius??.33)+(track.tracks===2?.40:.25))).map(lot=>lot.key)])];
+      legs.some(({section,track})=>section&&shared.nearestExposed(lot,section.path)<(lot.radius??.33)+(track.tracks===2?.40:.25))).map(lot=>lot.key)])];
     const roads=[...new Set(impacts.flatMap(item=>item.roads.map(row=>row.key)))]
       .filter(key=>roadsMarked().includes(key)&&!protectedRoad(key));
     cost+=lots.length*8500+roads.length*3000;
@@ -383,7 +386,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     }
     return tie;
   }
-  function cleanPoint(p){return {x:p.x,y:p.y,z:p.z,bridge:p.bridge,water:p.water};}
+  function cleanPoint(p){return {x:p.x,y:p.y,z:p.z,bridge:p.bridge,tunnel:p.tunnel,gradeSeparation:p.gradeSeparation,water:p.water};}
   function save(){
     if(!state||routeEdit||stationEdit)return;
     try{localStorage.setItem(key(),JSON.stringify({state,view}));}catch{}
@@ -703,7 +706,9 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     }
     if(canRedraw(leg)){
       fields.push(button('Redraw section',()=>change(()=>{
-        state.legs[state.active]={...newLeg(leg.from,leg.to,tracks()[leg.trackId].tracks),id:leg.trackId,redraw:leg.trackId};
+        const built=tracks()[leg.trackId];
+        state.legs[state.active]={...newLeg(leg.from,leg.to,built.tracks),id:leg.trackId,redraw:leg.trackId,
+          crossingChoices:Object.fromEntries((built.crossings??[]).map(entry=>[entry.id,entry.choice]))};
         state.tool='shape';
       })));
     }
@@ -731,12 +736,33 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     if(preview.newLength)stats.push(preview.maxGrade.toFixed(1)+'% maximum grade');
     if(preview.lots.length)stats.push(preview.lots.length+' buildings affected');
     if(preview.roads.length)stats.push(preview.roads.length+' streets marked for removal');
+    if(crossingMarkers.length)stats.push(crossingMarkers.length+(crossingMarkers.length===1?' crossing':' crossings'));
     return fields;
+  }
+  function selectCrossing(entry,update=true){
+    if(!entry)return;
+    selectedCrossing=entry.key;
+    state.active=entry.section;
+    state.tool='shape';
+    activeLevel=-1;
+    if(update){
+      refresh();
+      q('.editorCrossings').scrollIntoView({block:'nearest'});
+    }
   }
   function refresh(){
     if(!state)return;
     const choosing=state.step===-1,running=state.step===2&&!stationEdit;
     preview=running?routePreview():null;
+    crossingMarkers=shared.crossingEntries(preview?.legs.map(leg=>leg.section)??[]);
+    const crossingPanel=q('.editorCrossings');
+    if(running&&!state.review){
+      const crossing=shared.crossingControls(crossingPanel,crossingMarkers,selectedCrossing,selectCrossing,(entry,choice)=>{
+        selectCrossing(entry,false);
+        change(()=>{(current().crossingChoices??={})[entry.id]=choice;});
+      },heightScale);
+      selectedCrossing=crossing?.key;
+    }else crossingPanel.hidden=true;
     const active=activeStation(),impact=stationImpact(active);
     placement=active?{impact,served:survivingCatchment(active,impact)}:null;
     const stats=[];
@@ -858,6 +884,11 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       const active=i===state.active, color=active?'#ffde7e':'#dbaa56';
       path(leg.points,'#412e15',leg.track.tracks===2?7:5);
       path(leg.points,color,leg.track.tracks===2?4:2.5);
+      for(let p=1;p<leg.points.length;p++){
+        const points=leg.points.slice(p-1,p+1);
+        if(points[1].gradeSeparation&&points[1].bridge)path(points,'#7452a0',4);
+        if(points[1].tunnel){ctx.setLineDash([4,3]);path(points,'#405f85',4);ctx.setLineDash([]);}
+      }
       if(active)for(const bend of current().handles)mark(bend,4,'#fff6cd');
     }
     const platform=(s,highlight)=>{
@@ -899,6 +930,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     for(const s of Object.values(stations()))if(!drawn.has(s.id))platform(s,false);
     for(const s of (state.stations??[]).filter(Boolean))platform(s,true);
     if(stationEdit)platform(state.station,true);
+    if(state.step===2)shared.drawCrossingMarkers(ctx,screen,crossingMarkers,selectedCrossing);
     const placing=!stationEdit&&state.step>=0&&state.step<2&&active;
     const turnable=placing&&!committedStation(active);
     if(placing){
@@ -929,7 +961,8 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     return {path,length:run};
   }
   function profileBounds(section=profileSection()){
-    const values=section.path.flatMap(p=>[p.ground,p.z]).concat(section.levels?.map(p=>p.z)??[]);
+    const crossingLevels=crossingMarkers.filter(entry=>entry.section===state.active).map(entry=>entry.otherZ).filter(Number.isFinite);
+    const values=section.path.flatMap(p=>[p.ground,p.z]).concat(section.levels?.map(p=>p.z)??[],crossingLevels);
     const w=profile.clientWidth,h=profile.clientHeight;
     return {min:profileDrag?.scale.min??Math.min(...values)-.12,max:profileDrag?.scale.max??Math.max(...values)+.20,
       w,h,left:35,right:w-13,top:10,bottom:h-22};
@@ -956,6 +989,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       section.path.forEach((p,i)=>{if(i)pc.lineTo(x(p.d/section.length),y(p.z));else pc.moveTo(x(0),y(p.z));});
       pc.strokeStyle='#1f6c79';pc.lineWidth=2.8;pc.stroke();
     }
+    shared.drawCrossingProfile(pc,g,x,y,section.length,crossingMarkers.filter(entry=>entry.section===state.active));
     pc.fillStyle='#44594e';pc.fillText('0',g.left,g.h-5);
     pc.textAlign='right';pc.fillText((section.length*.04).toFixed(2)+' km',g.right,g.h-5);pc.textAlign='left';
     const level=design&&current().vips[activeLevel],input=q('.rl-profile input');
@@ -991,6 +1025,8 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       change(()=>setStop(state.step,createStation(worldPoint,state.places[state.step])));
       return;
     }
+    const crossing=shared.hitCrossing(screen,crossingMarkers,p);
+    if(crossing){selectCrossing(crossing);return;}
     if(state.tool==='reuse'){
       const found=Object.values(tracks()).map(track=>({track,gap:nearest(worldPoint,track.points)})).sort((a,b)=>a.gap-b.gap)[0];
       if(!found||found.gap*scale()>15){showIssue('Tap closer to a built section.');return;}
@@ -1034,7 +1070,8 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     const p=eventPoint(e,map);
     pointers.set(e.pointerId,p);
     if(pointers.size===1){
-      const bend=!state.review&&state.step===2&&state.tool==='shape'&&!current()?.trackId?
+      const bend=!state.review&&state.step===2&&state.tool==='shape'&&!current()?.trackId&&
+        !shared.hitCrossing(screen,crossingMarkers,p)?
         current()?.handles.findIndex(handle=>distance(p,screen(handle))<12):-1;
       const active=activeStation(),onPlatform=!stationEdit&&state.step>=0&&state.step<2&&active&&!stations()[active.id]&&
         shared.hitsStation(world(p),active,Math.max(.12,9/scale()));

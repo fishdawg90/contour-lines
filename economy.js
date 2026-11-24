@@ -6,7 +6,7 @@ window.ContourEconomy = function(valley) {
   const state=data.market??={cash:startingCash[data.difficulty]??startingCash.standard,stock:0,orders:{},received:{}};
   const radius=7, fare=480, vehiclePrice=6000, stockLimit=96, weekSeconds=15;
   const millUpgradeDemand=60;
-  const runningCostMultiplier=1.5;
+  const runningCostMultiplier=1.5,roadTravelRate=.60,maxQuickBonus=.40;
   const truckCapacity=4, busCapacity=8, startupWeeks=1;
   const rail=window.ContourRail,isRail=route=>route.mode==='rail';
   const equipmentQuotes=new WeakMap();
@@ -34,6 +34,22 @@ window.ContourEconomy = function(valley) {
   }
   function vehicleSide(route,vehicle,run){
     return isRail(route)?railState(vehicle).from:vehicle.phase>=run.travel+bayTime?1:0;
+  }
+  function scheduledTravel(route,run){
+    return isRail(route)?run.travel:run.travel/roadTravelRate;
+  }
+  function advanceDeliveryClock(route,run,vehicle,dt){
+    if(!vehicle.load){delete vehicle.deliveryElapsed;return;}
+    if(!Number.isFinite(vehicle.deliveryElapsed)){
+      if(isRail(route)){
+        const motion=railState(vehicle);
+        vehicle.deliveryElapsed=(motion.travelElapsed??(run.travel*motion.distance/(run.length*rail.metresPerUnit)))+motion.dwell;
+      }else{
+        const from=vehicleSide(route,vehicle,run);
+        vehicle.deliveryElapsed=Math.max(0,vehicle.phase-from*(run.travel+bayTime));
+      }
+    }
+    vehicle.deliveryElapsed+=dt;
   }
   function vehicleCapacity(route,vehicle){
     return isRail(route)?railQuote(route,vehicle).capacity:isFreight(route)?truckCapacity:busCapacity;
@@ -551,7 +567,7 @@ window.ContourEconomy = function(valley) {
   }
   function timberLoading(route,from,run,load=0,batch=capacity(route)){
     const station=route.stations[1-from],town=source(station);
-    const demand=timberForRoute(town,station,run.travel);
+    const demand=timberForRoute(town,station,scheduledTravel(route,run));
     const remaining=batch-load;
     const market=timberMarket(town);
     const room=timberBuffer(town)-market.stock-market.inbound;
@@ -567,7 +583,7 @@ window.ContourEconomy = function(valley) {
       const station=plan?.cargo==='timber'&&plan.to===city?route.stations.find(s=>source(s)===city):null;
       if(!station)continue;
       connected=true;
-      order=Math.max(order,timberForRoute(city,station,valley.truckRuns[index].travel));
+      order=Math.max(order,timberForRoute(city,station,scheduledTravel(route,valley.truckRuns[index])));
     }
     if(connected)return order;
     const market=timberMarket(city);
@@ -933,7 +949,7 @@ window.ContourEconomy = function(valley) {
     const batch=vehicleCapacity(route,vehicle),remaining=batch-vehicle.load;
     const target=route.stations[1-from];
     const reachableHomes=legacy||isIndustry(plan.to)?0:catchment(target,plan.to,'delivery',plan.cargo).length;
-    const request=!legacy&&freight.orders(plan.to,plan.cargo,run.travel,reachableHomes);
+    const request=!legacy&&freight.orders(plan.to,plan.cargo,scheduledTravel(route,run),reachableHomes);
     if(request&&!isIndustry(plan.to)){
       const staged=yardStock(stationKey(target),plan.cargo);
       request.order=Math.max(0,request.order-staged);
@@ -965,18 +981,28 @@ window.ContourEconomy = function(valley) {
     if(legacy)timberMarket(plan.to).inbound+=picked;
     else freight.reserve(plan.to,plan.cargo,picked);
   }
+  function quickBonusRate(direct,elapsed){
+    return Math.min(maxQuickBonus,Math.max(0,.75*(1-elapsed/(8+direct*50))));
+  }
+  function recordDelivery(service,vehicle,receipt){
+    service.lastDelivery=receipt;
+    receipts.set(vehicle,{...receipt,age:0});
+  }
   function arrival(r,v,dest,run){
     v.unloaded=v.load;
     if(!v.load)return;
     const city=source(r.stations[dest]),svc=fleet(r),plan=routeTrade(r),cargo=isFreight(r),timber=plan?.cargo==='timber'&&!plan.to.depot;
-    const direct=distance(source(r.stations[0]),source(r.stations[1]))*.04;
-    const travel=isRail(r)?(railState(v).travelElapsed||run.travel):run.travel;
-    const quality=Math.min(1,(35+direct*45)/travel);
+    const direct=distance(r.stations[0],r.stations[1])*.04;
+    const elapsed=v.deliveryElapsed??scheduledTravel(r,run);
+    delete v.deliveryElapsed;
+    const quality=Math.min(1,(35+direct*45)/Math.max(.01,elapsed));
+    const quick=quickBonusRate(direct,elapsed);
     const rate=timber?fare*.88:cargo?ContourRegion.goods[plan.cargo][3]:120;
     const distanceFactor=valley.region?Math.sqrt(direct)*.72+direct*.31:Math.sqrt(direct);
-    const pay=city.depot?0:Math.round(v.load*rate*distanceFactor*quality);
+    const base=city.depot?0:Math.round(v.load*rate*distanceFactor*quality);
+    const bonus=Math.round(base*quick),pay=base+bonus;
     const handling=v.load*(cargo?12:5);
-    if(pay)receipts.set(v,{pay,age:0});
+    if(pay)recordDelivery(svc,v,{pay,base,bonus,direct,elapsed});
     bookRoute(svc,'revenue',pay);bookRoute(svc,'expenses',handling);bookRoute(svc,'delivered',v.load);
     book('revenue',pay);book('operating',handling);
     if(cargo&&!timber){
@@ -1035,7 +1061,7 @@ window.ContourEconomy = function(valley) {
     v.load=0;
   }
   const unloadTime=2.8, bayTime=unloadTime+1.4, truckGap=.42,localDwell=.8;
-  const localSpeed=route=>route.local==='delivery'?.72:.88;
+  const localSpeed=route=>roadTravelRate*(route.local==='delivery'?.72:.88);
   function routeThroughput(route,index){
     const account=fleet(route),actual=account.lastMonth?.delivered??null;
     const vehicles=account.vehicles.filter(vehicle=>!vehicle.retiring);
@@ -1051,7 +1077,8 @@ window.ContourEconomy = function(valley) {
       const lanes=run?.blocks.length&&run.blocks.every(block=>block.tracks===2)&&!run.switches.length&&!run.crossings.length?2:1;
       return {actual,potential:potential*Math.min(1,lanes/Math.max(1,cycles.length))};
     }
-    const travel=valley.truckRuns?.[index]?.travel;
+    const run=valley.truckRuns?.[index];
+    const travel=run?scheduledTravel(route,run):NaN;
     const cycle=route.local?route.length/localSpeed(route)+(route.events?.length-1)*localDwell:
       2*(travel+bayTime);
     const capacityPerCycle=capacity(route)*(isFreight(route)?1:2);
@@ -1107,7 +1134,7 @@ window.ContourEconomy = function(valley) {
     const length=distance(a,b)||1,sign=reverse?-1:1;
     const dx=sign*(b.x-a.x)/length,dy=sign*(b.y-a.y)/length;
     return {x:a.x+(b.x-a.x)*t+dy*lane,y:a.y+(b.y-a.y)*t-dx*lane,z:a.z+(b.z-a.z)*t+.031,
-      dx,dy,yaw:Math.atan2(dy,dx)};
+      dx,dy,yaw:Math.atan2(dy,dx),tunnel:Boolean((t<.5?a:b).tunnel)};
   }
   const localPose=(route,phase)=>roadPose(route.path,phase,'distance',.055);
   const mainPose=(run,from,d)=>roadPose(run.path,from?run.path.at(-1).length-d:d,'length',.073,from===1);
@@ -1271,6 +1298,7 @@ window.ContourEconomy = function(valley) {
         services.push({route,run,service,stops,plan});
       }
       for(const vehicle of service.vehicles){
+        advanceDeliveryClock(route,run,vehicle,dt);
         const receipt=receipts.get(vehicle);
         if(receipt){receipt.age+=dt;if(receipt.age>=3)receipts.delete(vehicle);}
       }
@@ -1426,6 +1454,7 @@ window.ContourEconomy = function(valley) {
       motion.waitAge=0;
       vehicle.fillElapsed=0;
       vehicle.ready=false;
+      if(vehicle.load)vehicle.deliveryElapsed??=0;
     }
   }
   function advanceRoute({route,run,service,stops,plan},dt,locks,industryBays,traffic,crossings){
@@ -1490,8 +1519,9 @@ window.ContourEconomy = function(valley) {
           if(wait){v.waiting=wait;continue;}
           v.fillElapsed=0;
           v.ready=false;
+          if(v.load)v.deliveryElapsed??=0;
         }
-        const target=Math.min(run.travel,local+dt);
+        const target=Math.min(run.travel,local+dt*roadTravelRate);
         const desired=distanceAlongLane(run,from,target);
         let distance=Math.max(oldDistance,Math.min(desired,limit,crossingLimit));
         const before=mainPose(run,from,oldDistance),after=mainPose(run,from,distance);
@@ -1517,8 +1547,47 @@ window.ContourEconomy = function(valley) {
       }
     }
   }
+  function localTripPoint(route,event){
+    const point=localPose(route,event.distance);
+    return {x:point.x,y:point.y,at:clock()};
+  }
+  function addLocalBonus(trip,pickup,destination,base,count){
+    if(!Number.isFinite(pickup?.at))return;
+    const elapsed=Math.max(0,destination.at-pickup.at);
+    trip.bonus+=Math.round(base*quickBonusRate(distance(pickup,destination)*.04,elapsed))*count;
+    trip.elapsed+=elapsed*count;
+    trip.timedUnits+=count;
+  }
+  function loadLocalCargo(vehicle,point,count){
+    if(!count)return;
+    // Loads from older saves have no pickup time. Deliver those first at base pay.
+    const pickups=vehicle.localCargoPickups??=(vehicle.load?[{count:vehicle.load}]:[]);
+    pickups.push({count,...point});
+  }
+  function unloadLocalCargo(vehicle,point,count,trip){
+    let remaining=count;
+    const pickups=vehicle.localCargoPickups;
+    while(remaining&&pickups?.length){
+      const pickup=pickups[0],loads=Math.min(remaining,pickup.count);
+      addLocalBonus(trip,pickup,point,65,loads);
+      pickup.count-=loads;
+      remaining-=loads;
+      if(!pickup.count)pickups.shift();
+    }
+  }
+  function boardLocal(vehicle,key,accept,capacity,point){
+    const before=vehicle.passengers?.length??0;
+    board(vehicle,key,accept,capacity);
+    const boardings=vehicle.localPickup??={};
+    for(const id of vehicle.passengers.slice(before))boardings[id]=point;
+  }
+  function localPassengerBonus(trip,vehicle,id,point){
+    if(!vehicle.localPickup)return;
+    addLocalBonus(trip,vehicle.localPickup[id],point,20,1);
+    delete vehicle.localPickup[id];
+  }
   function settleLocal(route,vehicle,event,city,service){
-    const cap=capacity(route);
+    const cap=capacity(route),point=localTripPoint(route,event),trip={bonus:0,elapsed:0,timedUnits:0};
     if(route.local==='delivery'){
       const cargo=localCargo(route),timber=cargo==='timber';
       const market=timber?timberMarket(city):freight.storage(city,cargo);
@@ -1527,10 +1596,12 @@ window.ContourEconomy = function(valley) {
         if(vehicle.retiring){
           changeYardStock(route.hub,cargo,vehicle.load);
           vehicle.load=0;
+          delete vehicle.localCargoPickups;
           return;
         }
         const count=Math.min(cap-vehicle.load,room,localStock(route));
         takeLocalStock(route,city,count);
+        loadLocalCargo(vehicle,point,count);
         vehicle.load+=count;
         return;
       }
@@ -1544,7 +1615,8 @@ window.ContourEconomy = function(valley) {
         received.timber+=count;
       }else freight.deliver(city,cargo,count,0);
       vehicle.load-=count;
-      payLocal(service,vehicle,count,65);
+      unloadLocalCargo(vehicle,point,count,trip);
+      payLocal(service,vehicle,count,65,trip);
       return;
     }
     if(event.stop===undefined){
@@ -1554,11 +1626,12 @@ window.ContourEconomy = function(valley) {
         const person=people[ids[i]];
         if(person?.localDrop)continue;
         if(person)joinQueue(person,route.hub,city.id);
+        localPassengerBonus(trip,vehicle,ids[i],point);
         ids.splice(i,1);dropped++;
       }
       vehicle.load=ids.length;
-      payLocalPassengers(service,vehicle,dropped,city);
-      if(!vehicle.retiring)board(vehicle,route.hub,p=>route.stops.some(stop=>stopKey(city.id,stop)===p.localDrop),cap);
+      payLocalPassengers(service,vehicle,dropped,city,trip);
+      if(!vehicle.retiring)boardLocal(vehicle,route.hub,p=>route.stops.some(stop=>stopKey(city.id,stop)===p.localDrop),cap,point);
       return;
     }
     const key=stopKey(city.id,route.stops[event.stop]);
@@ -1567,25 +1640,26 @@ window.ContourEconomy = function(valley) {
     for(let i=ids.length-1;i>=0;i--){
       const person=people[ids[i]];
       if(person?.localDrop!==key)continue;
+      localPassengerBonus(trip,vehicle,ids[i],point);
       if(person.returning)delete people[person.id];
       else Object.assign(person,{localDrop:null,visitStop:key,visitUntil:state.tripTick+4});
       ids.splice(i,1);dropped++;
     }
     vehicle.load=ids.length;
-    payLocalPassengers(service,vehicle,dropped,city);
-    if(!vehicle.retiring)board(vehicle,key,p=>p.hub===route.hub,cap);
+    payLocalPassengers(service,vehicle,dropped,city,trip);
+    if(!vehicle.retiring)boardLocal(vehicle,key,p=>p.hub===route.hub,cap,point);
   }
-  function payLocalPassengers(service,vehicle,count,city){
+  function payLocalPassengers(service,vehicle,count,city,trip){
     if(!count)return;
     const trips=serviceHistory.localTrips;
     trips[city.id]=(trips[city.id]??0)+count;
-    payLocal(service,vehicle,count,20);
+    payLocal(service,vehicle,count,20,trip);
   }
-  function payLocal(service,vehicle,count,rate){
+  function payLocal(service,vehicle,count,rate,trip){
     if(!count)return;
-    const pay=count*rate;
+    const {bonus,elapsed,timedUnits}=trip,base=count*rate,pay=base+bonus;
     bookRoute(service,'delivered',count);bookRoute(service,'revenue',pay);book('revenue',pay);
-    receipts.set(vehicle,{pay,age:0});
+    recordDelivery(service,vehicle,{pay,base,bonus,elapsed:timedUnits?elapsed/timedUnits:null});
   }
   function validLoop(route){
     if(route.local==='delivery'){
@@ -1610,6 +1684,8 @@ window.ContourEconomy = function(valley) {
       }
       for(const id of vehicle.passengers??[])if(people[id])joinQueue(people[id],route.hub,route.city);
       vehicle.passengers=[];
+      delete vehicle.localPickup;
+      delete vehicle.localCargoPickups;
       receipts.delete(vehicle);
       Object.assign(vehicle,{phase:0,load:0,ready:true,delay:Math.min(i*2,8),next:0,riders:{},trafficWait:0,trafficClearance:0});
     }
@@ -1684,6 +1760,7 @@ window.ContourEconomy = function(valley) {
     for(const vehicle of fleet(route).vehicles){
       if(!vehicle.load)continue;
       const count=vehicle.load;
+      delete vehicle.deliveryElapsed;
       if(plan.cargo==='passengers'){
         const side=vehicleSide(route,vehicle,run),origin=route.stations[side],destination=source(route.stations[1-side]);
         const stop=passengerStop(destination),hub=stationKey(origin);

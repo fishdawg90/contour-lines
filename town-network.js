@@ -1,7 +1,20 @@
 (() => {
 'use strict';
 const gap=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
-const interpolate=(a,b,t)=>({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t,z:a.z+(b.z-a.z)*t});
+const pointFlags=p=>({
+  ...(p.bridge?{bridge:true}:{}),...(p.tunnel?{tunnel:true}:{}),
+  ...(p.gradeSeparation?{gradeSeparation:p.gradeSeparation}:{}),
+  ...(p.gradeApproach?{gradeApproach:p.gradeApproach}:{})
+});
+const pointGeometry=p=>({x:p.x,y:p.y,z:p.z,...pointFlags(p)});
+function interpolate(a,b,t){
+  if(t===0)return pointGeometry(a);
+  if(t===1)return pointGeometry(b);
+  return {x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t,z:a.z+(b.z-a.z)*t,
+    ...pointFlags({bridge:a.bridge&&b.bridge,tunnel:a.tunnel&&b.tunnel,
+      gradeSeparation:a.gradeSeparation===b.gradeSeparation&&a.gradeSeparation,
+      gradeApproach:a.gradeApproach===b.gradeApproach&&a.gradeApproach})};
+}
 const clamp=(v,min,max)=>Math.min(max,Math.max(min,v));
 const stationKey=s=>s.hubKey||window.contourStationKey(s);
 function project(p,a,b){
@@ -126,7 +139,7 @@ function makeGraph(roads,elevationTolerance=.12){
     if(!costs.has(end))return [];
     const result=[end];
     while(result.at(-1)!==start)result.push(previous.get(result.at(-1)));
-    return result.reverse().map(({x,y,z})=>({x,y,z}));
+    return result.reverse().map(pointGeometry);
   }
   function entrance(point,limit,eligible){
     const pool=point.road===undefined?nodes:byRoad.get(point.road)??[];
