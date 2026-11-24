@@ -365,3 +365,7 @@
 #demolitionClose{min-width:38px}
 main.demolishing #mapPlaces,main.demolishing .controls,main.demolishing #serviceToggles{visibility:hidden}
 main.demolishing #scene{cursor:crosshair}
+
+#appVersion,#startVersion{font:600 10px/1.2 system-ui,sans-serif;font-variant-numeric:tabular-nums;letter-spacing:.03em}
+#appVersion{display:block;margin-top:2px;color:#becdbf}
+#startVersion{position:absolute;top:max(14px,env(safe-area-inset-top));left:14px;color:#eff4e9;background:#222c28d9;padding:4px 7px;border-radius:5px}

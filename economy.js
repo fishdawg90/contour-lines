@@ -552,7 +552,7 @@ window.ContourEconomy = function(valley) {
     return ContourRegion.townWeeklyDemand(city,cargo,state.received[city.id]?.expansion??0,homes(city).length,reachableHomes);
   }
   function weeklyDemand(city){return cargoNeed(city,'timber');}
-  function timberBuffer(city){return weeklyDemand(city)*2;}
+  function timberBuffer(city){return ContourRegion.timberStorageCapacity(city,state.received[city.id]?.expansion??0,homes(city).length);}
   function timberForRoute(city,station,travel){
     const market=timberMarket(city);
     const reached=catchment(station,city,'delivery').length;

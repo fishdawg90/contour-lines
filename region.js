@@ -65,17 +65,27 @@ function acceptsTownCargo(town,cargo){
   if(good[2]===3)return (levelThreeByTown[town.id]??levelThreeByTown.millbank).includes(cargo);
   return true;
 }
-function townWeeklyDemand(town,cargo,level,homeCount,reachableHomes=homeCount){
+function fullTownDemand(town,cargo,level,homeCount){
   if(!homeCount)return 0;
-  if(!town.starterGoods)return cargo==='timber'?Math.min(homeCount,reachableHomes):0;
+  if(!town.starterGoods)return cargo==='timber'?homeCount:0;
   const active=[...town.starterGoods];
   if(level>=3)active.push(...(levelThreeByTown[town.id]??levelThreeByTown.millbank));
   if(level>=5)active.push(...levelFiveGoods);
   const index=active.indexOf(cargo);
   if(index<0)return 0;
   const total=homeCount*2; // Four residents per home, half a load per resident across all goods.
-  const demand=Math.floor(total/active.length)+(index<total%active.length?1:0);
-  return Math.ceil(demand*Math.min(1,reachableHomes/homeCount));
+  return Math.floor(total/active.length)+(index<total%active.length?1:0);
+}
+function townWeeklyDemand(town,cargo,level,homeCount,reachableHomes=homeCount){
+  if(!homeCount)return 0;
+  if(!town.starterGoods)return cargo==='timber'?Math.ceil(Math.min(homeCount,reachableHomes)/2):0;
+  const full=fullTownDemand(town,cargo,level,homeCount);
+  const share=Math.max(0,Math.min(1,reachableHomes/homeCount));
+  return Math.ceil(full*share*(cargo==='timber'?.5:1));
+}
+function timberStorageCapacity(town,level,homeCount){
+  // Keep room for vehicle-sized deliveries as households use less timber.
+  return 2*fullTownDemand(town,'timber',level,homeCount);
 }
 function trades(a,b,{allowFormerDemand=false}={}){
   if(!a||!b||a.id===b.id)return [];
@@ -237,5 +247,5 @@ function generate(seed,step){
   }
   return {seed,region:'mixed',towns,industries,industry:industries[0],publicDepots:[depot],bounds,riverX,riverWidth,channels,wet,ground,designGround,grove,biome,biomeMix};
 }
-window.ContourRegion={generate,trade,trades,acceptsTownCargo,townWeeklyDemand,names,goods,bounds};
+window.ContourRegion={generate,trade,trades,acceptsTownCargo,townWeeklyDemand,timberStorageCapacity,names,goods,bounds};
 })();
