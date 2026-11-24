@@ -36,7 +36,7 @@ function ends(path) {
 }
 
 // Track connectivity is explicit. Lines crossing in plan do not introduce a node.
-function findCorridor(tracks,stations,from,to,blockedNodes=new Set(),blockedTracks=new Set()) {
+function findCorridor(tracks,stations,from,to,blockedNodes=new Set(),blockedTracks=new Set(),prior=null,next=null) {
   const distances=new Map(),pending=new Map();
   const approaches=new Map();
   for(const track of Object.values(tracks)){
@@ -50,11 +50,15 @@ function findCorridor(tracks,stations,from,to,blockedNodes=new Set(),blockedTrac
   while(pending.size){
     const [key,current]=[...pending].reduce((a,b)=>a[1].cost<=b[1].cost?a:b);
     pending.delete(key);
-    if(current.node===to)return current.steps;
+    if(current.node===to){
+      const last=current.steps.at(-1)??prior;
+      if(!last||!next||dot(ends(last.points)[1],ends(next.points)[0])<=-.54)return current.steps;
+      continue;
+    }
     distances.set(key,current.cost);
     if(current.node!==from&&stations[current.node]?.terminal)continue;
     for(const track of approaches.get(current.node)??[]){
-      const leg=directed(track,current.node),previous=current.steps.at(-1);
+      const leg=directed(track,current.node),previous=current.steps.at(-1)??prior;
       if(leg.to===from||blockedNodes.has(leg.to)||current.steps.some(p=>p.to===leg.to))continue;
       if(previous&&dot(ends(previous.points)[1],ends(leg.points)[0])>-.54)continue;
       const next={node:leg.to,steps:[...current.steps,leg],cost:current.cost+length(leg.points)};
@@ -453,13 +457,31 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     const stretch=findCorridor(network,built,entry.node,exit.node,blockedNodes,blockedTracks);
     if(!stretch.length){showIssue('Choose an exit connected to the entry by a continuous stretch of track.');return;}
     const [beforeEdits,afterEdits]=beforeAndAfter(leg,activeSection(),entry.point,exit.point);
-    const before=entry.node===leg.from?null:{...newLeg(leg.from,entry.node,leg.tracks),...beforeEdits};
-    const after=exit.node===leg.to?null:{...newLeg(exit.node,leg.to,leg.tracks),...afterEdits};
+    // Extend the picked stretch along compatible built approaches before designing links.
+    const usedTracks=new Set([...blockedTracks,...stretch.map(part=>part.track.id)]);
+    const beforeNodes=new Set([...occupied,...stretch.map(part=>part.to),leg.to]);
+    beforeNodes.delete(leg.from);beforeNodes.delete(entry.node);
+    const previous=state.legs[state.active-1];
+    const previousTrack=previous?.trackId&&network[previous.trackId];
+    const approach=findCorridor(network,built,leg.from,entry.node,beforeNodes,usedTracks,
+      previousTrack?directed(previousTrack,previous.from):null,stretch[0]);
+    for(const part of approach)usedTracks.add(part.track.id);
+    const afterNodes=new Set([...occupied,...stretch.map(part=>part.from),
+      ...approach.flatMap(part=>[part.from,part.to]),leg.from]);
+    afterNodes.delete(exit.node);afterNodes.delete(leg.to);
+    const following=state.legs[state.active+1];
+    const followingTrack=following?.trackId&&network[following.trackId];
+    const departure=findCorridor(network,built,exit.node,leg.to,afterNodes,usedTracks,
+      stretch.at(-1),followingTrack?directed(followingTrack,following.from):null);
+    const before=entry.node===leg.from?[]:approach.length?approach.map(reusedDraft):
+      [{...newLeg(leg.from,entry.node,leg.tracks),...beforeEdits}];
+    const after=exit.node===leg.to?[]:departure.length?departure.map(reusedDraft):
+      [{...newLeg(exit.node,leg.to,leg.tracks),...afterEdits}];
     change(()=>{
-      const sections=[before,...stretch.map(reusedDraft),after].filter(Boolean);
+      const sections=[...before,...stretch.map(reusedDraft),...after];
       state.legs.splice(state.active,1,...sections);
       state.trackCuts=cuts;
-      if(after)state.active+=sections.length-1;
+      state.active+=Math.max(0,sections.findIndex(section=>!section.trackId));
       setTool('shape');
       activeLevel=-1;
     });
