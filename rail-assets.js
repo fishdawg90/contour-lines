@@ -109,6 +109,10 @@
     });
   }
   function trackMesh(path,wet,flags={}){
+    if(flags.stationProfile){
+      const {lines}=ContourRail.trackLines(path,null,flags.stationProfile);
+      return lines.flatMap(line=>trackMesh({...line,tracks:1},wet));
+    }
     const {points,tracks}=path,section=frames(points);
     const tapered=flags.taperStart||flags.taperEnd;
     const total=tapered?points.slice(1).reduce((sum,point,i)=>sum+Math.hypot(point.x-points[i].x,point.y-points[i].y),0):0;

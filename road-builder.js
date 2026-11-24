@@ -52,20 +52,19 @@ function curve(points,startHeading,endHeading) {
   return [...out, {...points.at(-1)}];
 }
 
-function footprintExtents(s){
-  if(s.mode!=='rail')return {start:-STATION_HALF_WIDTH,end:STATION_HALF_WIDTH,depth:STATION_HALF_DEPTH};
-  const span=s.platformLength??2.4;
-  return {start:s.terminal?0:-span/2,end:s.terminal?span:span/2,depth:.62};
+function footprintExtents(s,tracks){
+  if(s.mode==='rail')return ContourRail.stationLayout(s,tracks);
+  return {start:-STATION_HALF_WIDTH,end:STATION_HALF_WIDTH,normalMin:-STATION_HALF_DEPTH,normalMax:STATION_HALF_DEPTH};
 }
-function stationFootprint(s,margin=0){
-  const {start,end,depth}=footprintExtents(s);
-  const w=start-margin,e=end+margin,h=depth+margin;
-  return [[w,-h],[e,-h],[e,h],[w,h]].map(([u,v])=>({x:s.x-s.ny*u+s.nx*v,y:s.y+s.nx*u+s.ny*v}));
+function stationFootprint(s,margin=0,tracks){
+  const {start,end,normalMin,normalMax}=footprintExtents(s,tracks);
+  const w=start-margin,e=end+margin,near=normalMin-margin,far=normalMax+margin;
+  return [[w,near],[e,near],[e,far],[w,far]].map(([u,v])=>({x:s.x-s.ny*u+s.nx*v,y:s.y+s.nx*u+s.ny*v}));
 }
-function hitsStation(p,s,clearance=0){
-  const {start,end,depth}=footprintExtents(s);
-  const x=p.x-s.x,y=p.y-s.y,along=-x*s.ny+y*s.nx;
-  return Math.abs(x*s.nx+y*s.ny)<depth+clearance&&along>start-clearance&&along<end+clearance;
+function hitsStation(p,s,clearance=0,tracks){
+  const {start,end,normalMin,normalMax}=footprintExtents(s,tracks);
+  const x=p.x-s.x,y=p.y-s.y,along=-x*s.ny+y*s.nx,normal=x*s.nx+y*s.ny;
+  return normal>normalMin-clearance&&normal<normalMax+clearance&&along>start-clearance&&along<end+clearance;
 }
 
 // The terrain display exaggerates elevations. Convert a physical 2H:1V
@@ -138,8 +137,8 @@ function verticalDesign(levels,length,heightScale,startGrade=0,endGrade=0,railAp
 }
 window.roadEarthworks={section:sectionEarthwork,design:designTerrain,formation:FORMATION};
 
-function stationRoadConflict(s,nodes){
-  const {start,end,depth}=footprintExtents(s);
+function stationRoadConflict(s,nodes,tracks){
+  const {start,end,normalMin,normalMax}=footprintExtents(s,tracks);
   function local(p){
     const x=p.x-s.x,y=p.y-s.y;
     return {x:x*s.nx+y*s.ny,y:-x*s.ny+y*s.nx};
@@ -147,7 +146,7 @@ function stationRoadConflict(s,nodes){
   for(let i=1;i<nodes.length;i++){
     const a=local(nodes[i-1]),b=local(nodes[i]);
     let t0=0,t1=1;
-    for(const [k,min,max] of [['x',-depth-.20,depth+.20],['y',start-.20,end+.20]]){
+    for(const [k,min,max] of [['x',normalMin-.20,normalMax+.20],['y',start-.20,end+.20]]){
       const d=b[k]-a[k];
       if(Math.abs(d)<1e-8){if(a[k]<min||a[k]>max){t0=2;break;}continue;}
       const v=(min-a[k])/d,w=(max-a[k])/d;
@@ -219,6 +218,20 @@ function createTerrainPainter(){
   }
 
 }
+
+function drawDirection(ctx,screen,width,height,from,to,label){
+    const a=screen(from), target=screen(to), dx=target.x-a.x,dy=target.y-a.y,d=Math.hypot(dx,dy);
+    if(d<1)return;
+    const length=clamp(d,44,114),ux=dx/d,uy=dy/d;
+    const origin={x:a.x+ux*17,y:a.y+uy*17},end={x:a.x+ux*(length+17),y:a.y+uy*(length+17)};
+    ctx.strokeStyle='#62458f';ctx.fillStyle='#62458f';ctx.lineWidth=3.5;ctx.setLineDash([4,4]);
+    ctx.beginPath();ctx.moveTo(origin.x,origin.y);ctx.lineTo(end.x,end.y);ctx.stroke();ctx.setLineDash([]);
+    ctx.beginPath();ctx.moveTo(end.x,end.y);ctx.lineTo(end.x-ux*11+uy*5,end.y-uy*11-ux*5);
+    ctx.lineTo(end.x-ux*11-uy*5,end.y-uy*11+ux*5);ctx.closePath();ctx.fill();
+    const tx=clamp(end.x,52,width-52),ty=clamp(end.y-12,15,height-20);
+    ctx.font='bold 13px system-ui';ctx.textAlign='center';ctx.lineWidth=4;
+    ctx.strokeStyle='#fff9e5';ctx.strokeText(label,tx,ty);ctx.fillText(label,tx,ty);
+  }
 
 function drawTownMap({ctx,screen,line,scaleHint,w,h,valley,lots,roads,lost,served,roadConflicts,deleted}){
     for(const lot of lots){
@@ -295,7 +308,7 @@ function createStationPainter(stationFaces,area){
   const stationFaceCache=new Map();
   function paint(station,apron=false,tracks=1){
     if(!stationFaces){area(stationFootprint(station),'#68766d');return;}
-    const key=JSON.stringify([station.x,station.y,station.z,station.nx,station.ny,station.place,station.millBay,station.bayUse,station.mode,station.platformLength,station.terminal,tracks,apron]);
+    const key=JSON.stringify([station.x,station.y,station.z,station.nx,station.ny,station.place,station.millBay,station.bayUse,station.mode,station.platformLength,station.terminal,station.platformCount,tracks,apron]);
     if(!stationFaceCache.has(key)){
       if(stationFaceCache.size>=96)stationFaceCache.delete(stationFaceCache.keys().next().value);
       const faces=stationFaces(station,apron,tracks),depth=face=>face.points.reduce((sum,p)=>sum+p[2]+(p[1]-station.y)*.10,0)/face.points.length;
@@ -384,7 +397,7 @@ function endpointControls(valley,places,origin,destination,onSelect){
   select.onchange=()=>onSelect(places.find(place=>place.id===select.value));
   return [select];
 }
-window.ContourRouteEditor={endpointControls,createTerrainPainter,createStationPainter,drawTownMap,drawProfileBase,drawProfileCurve,stationFootprint,
+window.ContourRouteEditor={drawDirection,endpointControls,createTerrainPainter,createStationPainter,drawTownMap,drawProfileBase,drawProfileCurve,stationFootprint,
   hitsStation,stationRoadConflict,protectedRoad,cityRoadRows,builtLots,tracePath,pointerAt,bindProfileEditor};
 
 window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightScale,draftKey,stationFaces,begin,commit,upgradeStation,finish}) {
@@ -1034,16 +1047,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
   }
 
   function arrow(from,to,label){
-    const a=screen(from), target=screen(to), dx=target.x-a.x,dy=target.y-a.y,d=Math.hypot(dx,dy);
-    if(d<1)return;
-    const length=clamp(d,44,114),ux=dx/d,uy=dy/d;
-    const origin={x:a.x+ux*17,y:a.y+uy*17},end={x:a.x+ux*(length+17),y:a.y+uy*(length+17)};
-    ctx.strokeStyle='#62458f';ctx.fillStyle='#62458f';ctx.lineWidth=3.5;ctx.setLineDash([4,4]);
-    ctx.beginPath();ctx.moveTo(origin.x,origin.y);ctx.lineTo(end.x,end.y);ctx.stroke();ctx.setLineDash([]);
-    ctx.beginPath();ctx.moveTo(end.x,end.y);ctx.lineTo(end.x-ux*11+uy*5,end.y-uy*11-ux*5);
-    ctx.lineTo(end.x-ux*11-uy*5,end.y-uy*11+ux*5);ctx.closePath();ctx.fill();
-    const tx=clamp(end.x,52,map.clientWidth-52),ty=clamp(end.y-12,15,map.clientHeight-20);
-    mapText(world({x:tx,y:ty}),label,'#62458f');
+    drawDirection(ctx,screen,map.clientWidth,map.clientHeight,from,to,label);
   }
 
   const drawStationAsset=createStationPainter(stationFaces,area);
@@ -1105,9 +1109,35 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     if(active)drawRouteEdges(s);
   }
 
+  let railMapRuns=null,railMapPaths=[];
+  function drawBuiltTracks(valley){
+    // Runs are rebuilt whenever the track layout or platforms change.
+    if(railMapRuns!==valley.truckRuns){
+      railMapRuns=valley.truckRuns;
+      railMapPaths=Object.values(valley.transport.railTracks??{}).flatMap(track=>
+        ContourRail.trackLines(track,valley.transport).lines.map(lane=>lane.points));
+    }
+    ctx.save();
+    ctx.lineCap='butt';
+    for(const points of railMapPaths){
+      line(points,'#f2e9cb',Math.max(4,.22*scaleHint));
+      line(points,'#50473e',Math.max(2,.13*scaleHint));
+      ctx.setLineDash([1.5,Math.max(3,.13*scaleHint)]);
+      line(points,'#5f554a',Math.max(5,.26*scaleHint));
+      ctx.setLineDash([]);
+    }
+    ctx.restore();
+  }
+
   function drawBuiltBays(valley,width,height){
     for(const base of valley.builtStations){
       if(stationEdit&&choiceKey(base)===choiceKey(stationEdit.base))continue;
+      if(base.mode==='rail'){
+        const tracks=ContourRail.stationTrackCount(base,valley.transport);
+        if(scaleHint>=8)drawStationAsset(base,false,tracks);
+        else area(stationFootprint(base,0,tracks),'#5f554a');
+        continue;
+      }
       const bays=layoutBays(base);
       for(const bay of bays.length?bays:[base]){
         const q=screen(bay);
@@ -1181,6 +1211,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
       for(const points of reused)line(points,'#398676',Math.max(5,.37*scaleHint));
       if(draft.roadMode==='mixed')for(const [i,p] of (draft.joins??[]).entries())dot(p,9,'#30664b',i===0?'A':'B');
     }
+    drawBuiltTracks(valley);
     drawBuiltBays(valley,w,h);
     for(const [index,section] of (preview?.sections??[]).entries()){
       const {path}=section;if(path.length<2)continue;

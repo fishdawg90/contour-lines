@@ -10,6 +10,8 @@ window.ContourEconomy = function(valley) {
   const truckCapacity=4, busCapacity=8, startupWeeks=1;
   const rail=window.ContourRail,isRail=route=>route.mode==='rail';
   const equipmentQuotes=new WeakMap();
+  let crossingGeometry,crossingRuns,crossingLocal=[];
+  const noCrossingLimit={roadLimit:()=>Infinity,trainLimit:()=>Infinity};
   function railCargo(route){return routeTrade(route)?.cargo??route.cargo??'passengers';}
   function railQuote(route,vehicle){
     const cargo=railCargo(route);
@@ -1164,6 +1166,90 @@ window.ContourEconomy = function(valley) {
     vehicle.trafficClearance=.48;
     return true;
   }
+  function getCrossings(){
+    const runs=valley.truckRuns,locals=localRoutes.map(route=>route.path);
+    if(crossingGeometry&&runs===crossingRuns&&locals.length===crossingLocal.length&&locals.every((path,i)=>path===crossingLocal[i]))return crossingGeometry;
+    const roads=[],rails=[];
+    for(const [i,route] of data.routes.entries()){
+      const run=runs[i];
+      if(!(run?.path.length>1))continue;
+      if(isRail(route)){
+        for(const from of [0,1]){
+          const path=run.path.map(({length})=>{
+            const distance=(from?run.length-length:length)*rail.metresPerUnit;
+            return {...rail.pose(run,{rail:{from,distance}}),length};
+          });
+          rails.push({route,path,from});
+        }
+      }else roads.push({route,path:run.path,key:'length'});
+    }
+    for(const route of localRoutes)if(route.path?.length>1)roads.push({route,path:route.path,key:'distance'});
+    crossingRuns=runs;
+    crossingLocal=locals;
+    crossingGeometry=window.ContourCrossings?.build(roads,rails)??{byRoad:new Map(),byRail:new Map()};
+    return crossingGeometry;
+  }
+  function gradeCrossings(roadServices,loops,railServices){
+    const {byRoad,byRail}=getCrossings();
+    if(!byRail.size)return noCrossingLimit;
+    const closed=new Set(),roadEntries=new Map([...roadServices,...loops].map(entry=>[entry.route,entry]));
+    for(const {route,run,service} of railServices){
+      const crossings=byRail.get(route);
+      if(!crossings)continue;
+      for(const vehicle of service.vehicles){
+        const motion=railState(vehicle),unit=rail.metresPerUnit;
+        const {front,tail}=rail.trainSpan(run,vehicle,railQuote(route,vehicle).length/unit);
+        const approaches=motion.active&&motion.dwell<=0;
+        const warning=approaches?Math.max(1.45,motion.speed/unit*2.6*2.1):0;
+        for(const crossing of crossings){
+          if(crossing.railFrom!==motion.from)continue;
+          const along=motion.from?run.length-crossing.railAt:crossing.railAt;
+          if(front+warning>=along-crossing.railWidth&&tail<=along+crossing.railWidth)closed.add(crossing);
+        }
+      }
+    }
+    function roadLimit(route,from,length,oldDistance){
+      let limit=Infinity;
+      for(const crossing of byRoad.get(route)??[]){
+        if(!closed.has(crossing))continue;
+        const along=from?length-crossing.roadAt:crossing.roadAt;
+        const stop=Math.max(0,along-crossing.roadWidth);
+        // Vehicles that passed the stop line can clear the junction.
+        if(oldDistance<=stop+1e-7)limit=Math.min(limit,stop);
+      }
+      return limit;
+    }
+    function roadOccupies(crossing){
+      const entry=roadEntries.get(crossing.road);
+      if(!entry)return false;
+      const {route,run,service}=entry;
+      const low=crossing.roadAt-crossing.roadWidth,high=crossing.roadAt+crossing.roadWidth;
+      return service.vehicles.some(vehicle=>{
+        if(route.local)return vehicle.phase>Math.max(0,low)+1e-7&&vehicle.phase<high-1e-7;
+        if(vehicle.ready)return false;
+        const half=run.travel+bayTime,from=vehicle.phase>=half?1:0;
+        const local=Math.min(run.travel,vehicle.phase-from*half);
+        const distance=distanceAlongLane(run,from,local);
+        const position=from?run.length-distance:distance;
+        return distance>1e-7&&position>low+1e-7&&position<high-1e-7;
+      });
+    }
+    function trainLimit(route,run,vehicle,quote){
+      const available=byRail.get(route);
+      if(!available)return Infinity;
+      const motion=railState(vehicle),unit=rail.metresPerUnit;
+      const {front}=rail.trainSpan(run,vehicle,quote.length/unit);
+      let limit=Infinity;
+      for(const crossing of available){
+        if(crossing.railFrom!==motion.from)continue;
+        const along=motion.from?run.length-crossing.railAt:crossing.railAt;
+        const stop=along-crossing.railWidth;
+        if(front<=stop+1e-7&&roadOccupies(crossing))limit=Math.min(limit,Math.max(motion.distance,stop*unit));
+      }
+      return limit;
+    }
+    return {roadLimit,trainLimit};
+  }
   function drive(dt){
     const services=[],railServices=[];
     for(const [i,route] of data.routes.entries()){
@@ -1213,10 +1299,10 @@ window.ContourEconomy = function(valley) {
           if(destination.reach&&length-distance<destination.reach&&(!destination.yard||local<run.travel))locks.set(destination.key,route);
         }
       }
-      const span=Math.min(.10,left),traffic=townTraffic(services,loops);
-      for(const entry of services)advanceRoute(entry,span,locks,industryBays,traffic);
-      advanceRail(railServices,span);
-      driveLocal(span,loops,traffic);
+      const span=Math.min(.10,left),traffic=townTraffic(services,loops),crossings=gradeCrossings(services,loops,railServices);
+      for(const entry of services)advanceRoute(entry,span,locks,industryBays,traffic,crossings);
+      driveLocal(span,loops,traffic,crossings);
+      advanceRail(railServices,span,crossings);
     }
   }
   function canUnload(route,vehicle,destination,plan){
@@ -1236,13 +1322,28 @@ window.ContourEconomy = function(valley) {
     const blocks=rail.blockKeys(run,from);
     const ends=route.stations.flatMap((station,side)=>{
       const block=side?run.blocks.at(-1):run.blocks[0];
-      const key='station:'+stationKey(station);
-      // A single-track approach occupies both platform slots.
-      return block.tracks===1?[key+'/out',key+'/in']:[key+(side===from?'/out':'/in')];
+      const key='station:'+stationKey(station),platform=route.platforms?.[side];
+      const profile=block.profile?.[(side===0)===(block.direction===1)?'start':'end'];
+      const platformKey=key+'/platform-'+(platform??1);
+      if(profile){
+        const lane=profile.layout.lanes.find(lane=>lane.index===(platform??1));
+        const keys=[lane?platformKey:key+'/platform-1'];
+        if(block.tracks===2){
+          const direction=(from?1:-1)*block.direction;
+          const offset=(lane?.offset??0)*profile.side;
+          // A train crossing the centre of a double-track approach fouls the opposing running line.
+          keys.push(key+'/throat/'+direction);
+          if(offset*direction<0)keys.push(key+'/throat/'+(-direction));
+        }
+        return keys;
+      }
+      if(platform>1)return [platformKey];
+      if(platform===1||block.tracks===1)return [platformKey+'/out',platformKey+'/in'];
+      return [platformKey+(side===from?'/out':'/in')];
     });
     return [...blocks,...ends];
   }
-  function advanceRail(entries,dt){
+  function advanceRail(entries,dt,crossings){
     const claims=new Map(),staged=[];
     for(const entry of entries){
       const {route,run,service,plan}=entry;
@@ -1253,6 +1354,7 @@ window.ContourEconomy = function(valley) {
           staged.push({entry,vehicle,motion,quote,cargo});
           continue;
         }
+        let crossingStop=false;
         if(motion.dwell>0){
           const next=motion.dwell+dt,destination=1-motion.from;
           if(next>=unloadTime&&vehicle.load){
@@ -1276,7 +1378,9 @@ window.ContourEconomy = function(valley) {
         }else{
           const previous=motion.distance;
           motion.travelElapsed=(motion.travelElapsed??0)+dt;
-          const done=rail.advance(run,motion,quote,cargo,vehicle.load,dt);
+          const stop=crossings.trainLimit(route,run,vehicle,quote);
+          const done=rail.advance(run,motion,quote,cargo,vehicle.load,dt,stop);
+          crossingStop=Number.isFinite(stop)&&stop-motion.distance<1&&motion.speed<.6;
           const km=(motion.distance-previous)/1000;
           const expense=km*railRunningCost(vehicle.consist);
           bookRoute(service,'km',km);bookRoute(service,'expenses',expense);book('operating',expense);
@@ -1287,7 +1391,7 @@ window.ContourEconomy = function(valley) {
             motion.braking=0;
           }
         }
-        vehicle.waiting=motion.stallTime>1&&motion.dwell===0?'traction':null;
+        vehicle.waiting=crossingStop?'crossing':motion.stallTime>1&&motion.dwell===0?'traction':null;
         for(const key of railResources(entry,motion.from))claims.set(key,vehicle);
       }
     }
@@ -1324,7 +1428,7 @@ window.ContourEconomy = function(valley) {
       vehicle.ready=false;
     }
   }
-  function advanceRoute({route,run,service,stops,plan},dt,locks,industryBays,traffic){
+  function advanceRoute({route,run,service,stops,plan},dt,locks,industryBays,traffic,crossings){
     const elsewhere=stop=>stop.reach&&locks.has(stop.key)&&locks.get(stop.key)!==route;
     const half=run.travel+bayTime,length=run.path.at(-1).length;
     const gap=Math.min(truckGap,length/4);
@@ -1368,7 +1472,9 @@ window.ContourEconomy = function(valley) {
         const reserved=elsewhere(destinationStop);
         const bayBusy=occupied[destination]||destinationStop.sharedBay&&industryBays.has(destinationStop.dock);
         const limit=Math.min(reserved?Math.max(0,length-destinationStop.reach-gap):bayBusy?length-gap:length,ahead-gap);
+        const crossingLimit=crossings.roadLimit(route,from,length,oldDistance);
         if(v.ready){
+          if(crossingLimit<=1e-8){v.waiting='crossing';continue;}
           if(paused&&!v.load){v.waiting='orders';v.industryLoading=false;continue;}
           const owner=industryBays.get(originStop.dock);
           if((originStop.sharedBay?owner&&owner!==v:occupied[from])||
@@ -1387,7 +1493,7 @@ window.ContourEconomy = function(valley) {
         }
         const target=Math.min(run.travel,local+dt);
         const desired=distanceAlongLane(run,from,target);
-        let distance=Math.max(oldDistance,Math.min(desired,limit));
+        let distance=Math.max(oldDistance,Math.min(desired,limit,crossingLimit));
         const before=mainPose(run,from,oldDistance),after=mainPose(run,from,distance);
         if(!trafficPass(v,traffic.canMove(route,v,before,after),dt,distance-oldDistance))distance=oldDistance;
         traffic.place(route,v,distance===oldDistance?before:after);
@@ -1405,7 +1511,7 @@ window.ContourEconomy = function(valley) {
           occupied[destination]=true;
           if(destinationStop.sharedBay)industryBays.set(destinationStop.dock,v);
         }else if(distance+1e-8<desired){
-          v.waiting=reserved||bayBusy&&limit>=length-gap-1e-8?'bay':'traffic';
+          v.waiting=crossingLimit<=limit&&distance+1e-7>=crossingLimit?'crossing':reserved||bayBusy&&limit>=length-gap-1e-8?'bay':'traffic';
         }
         ahead=distance;
       }
@@ -1508,7 +1614,7 @@ window.ContourEconomy = function(valley) {
       Object.assign(vehicle,{phase:0,load:0,ready:true,delay:Math.min(i*2,8),next:0,riders:{},trafficWait:0,trafficClearance:0});
     }
   }
-  function driveLocal(dt,loops,traffic){
+  function driveLocal(dt,loops,traffic,crossings){
     for(const {route,city,service} of loops){
       for(const vehicle of [...service.vehicles]){
         vehicle.waiting=null;
@@ -1519,9 +1625,12 @@ window.ContourEconomy = function(valley) {
           if(vehicle.delay>0){const span=Math.min(left,vehicle.delay);vehicle.delay-=span;left-=span;continue;}
           const next=route.events[vehicle.next??0];
           const speed=localSpeed(route);
-          const length=Math.min(Math.max(0,next.distance-vehicle.phase),left*speed);
+          const desired=Math.min(Math.max(0,next.distance-vehicle.phase),left*speed);
+          const limit=crossings.roadLimit(route,0,route.length,vehicle.phase);
+          const length=Math.min(desired,Math.max(0,limit-vehicle.phase));
           const before=localPose(route,vehicle.phase),after=localPose(route,vehicle.phase+length);
           const spawning=!vehicle.phase&&!vehicle.next;
+          if(spawning&&limit<=1e-8){vehicle.waiting='crossing';break;}
           const clear=spawning?traffic.canEnter(vehicle,before):traffic.canMove(route,vehicle,before,after);
           if(!trafficPass(vehicle,clear,left,length)){
             vehicle.waiting='traffic';break;
@@ -1530,6 +1639,7 @@ window.ContourEconomy = function(valley) {
           traffic.place(route,vehicle,after);
           const km=length*.04,expense=km*(route.local==='delivery'?80:63)*runningCostMultiplier;
           bookRoute(service,'km',km);bookRoute(service,'expenses',expense);book('operating',expense);
+          if(length+1e-7<desired){vehicle.waiting='crossing';break;}
           if(vehicle.phase+1e-7<next.distance)break;
           settleLocal(route,vehicle,next,city,service);
           if(vehicle.retiring&&!vehicle.load){removeFromFleet(service,vehicle);traffic.leave(vehicle);break;}

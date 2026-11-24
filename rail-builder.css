@@ -29,3 +29,7 @@
 #railBuilder .rl-impact span{border-radius:8px;padding:3px 7px;font-size:12px;font-weight:650}
 #railBuilder .rl-impact .served{color:#d7edce;background:#395143}
 #railBuilder .rl-impact .affected{color:#ffdbcc;background:#623e35}
+#railBuilder .rl-rotate{position:absolute;z-index:2;display:flex;gap:3px;padding:3px;border-radius:9px;background:var(--coal);transform:translate(-50%,-100%);box-shadow:0 2px 7px #17211c40}
+#railBuilder .rl-rotate button{display:grid;place-items:center;width:44px;height:40px;padding:0;border:0;border-radius:7px;background:#344139;color:var(--pale);font:650 24px/1 system-ui}
+#railBuilder .rl-rotate button:focus-visible{outline:2px solid var(--mint)}
+#railBuilder .rl-platform-options summary{min-height:40px;align-content:center;padding:6px 10px;border:1px solid var(--edge);border-radius:8px;background:#35433b;color:var(--pale);font:500 14px/1.25 system-ui;cursor:pointer}

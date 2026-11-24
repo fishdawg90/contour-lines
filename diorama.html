@@ -44,7 +44,7 @@ canvas:active{cursor:grabbing}
 @media(max-width:400px){.controls{bottom:calc(var(--control-bottom) + 51px)}}
 </style>
 <link rel="stylesheet" href="./road-builder.css">
-<link rel="stylesheet" href="./rail-builder.css?v=rail-depot-2">
+<link rel="stylesheet" href="./rail-builder.css?v=rail-platforms-3">
 <link rel="stylesheet" href="./network.css?v=rail-depot-2">
 </head>
 <body>
@@ -129,7 +129,7 @@ canvas:active{cursor:grabbing}
   <ol>
     <li><strong>Check demand.</strong> Tap a town to see what it needs, or an industry to see what it produces.</li>
     <li><strong>Plan a route.</strong> Choose a road or rail route from <em>New route</em>. Connect two towns for passengers, or an industry to a buyer for its cargo.</li>
-    <li><strong>Build the line.</strong> Check the highlighted houses and streets while placing each station. Use <em>Elevation profile</em> to adjust the alignment before building. Through stations let you extend the railway later.</li>
+    <li><strong>Build the line.</strong> Check the highlighted houses and streets while placing each station. Use <em>Elevation profile</em> to adjust the alignment before building. Choose a through station to extend the railway later. Use <em>Add platform</em> to give another service its own stopping track.</li>
     <li><strong>Manage your fleet.</strong> Open a route to check deliveries and profit. For rail, choose <em>Add train</em> or <em>Edit consist</em>. Tap a model to add it, or select a vehicle in the train to move or remove it.</li>
     <li><strong>Reach more homes.</strong> Add a local bus or delivery loop to connect streets around a station.</li>
   </ol>
@@ -193,7 +193,7 @@ canvas:active{cursor:grabbing}
   <div class="teBottom"><strong id="teStatus"></strong><p id="teHelp" class="editorGuide" aria-live="polite"></p>
     <div class="teActions"><button id="teUndo">Undo point</button><button id="teConfirm" class="buy">Build</button></div></div>
 </dialog>
-<script src="./town-network.js"></script><script src="./town-editor.js"></script><script src="./valley-assets.js"></script><script src="./biome-assets.js"></script><script src="./region.js"></script><script src="./freight.js"></script><script src="./rail-sim.js"></script><script src="./rail-assets.js?v=rail-depot-2"></script><script src="./economy.js"></script><script src="./finance-charts.js"></script><script src="./route-overlay.js"></script><script src="./hud.js"></script><script src="./network-ui.js?v=rail-depot-2"></script><script src="./road-builder.js?v=rail-depot-2"></script><script src="./rail-builder.js?v=rail-depot-2"></script>
+<script src="./town-network.js"></script><script src="./town-editor.js"></script><script src="./valley-assets.js"></script><script src="./biome-assets.js"></script><script src="./region.js"></script><script src="./freight.js"></script><script src="./rail-sim.js?v=rail-platforms-3"></script><script src="./rail-assets.js?v=rail-platforms-3"></script><script src="./crossings.js?v=rail-platforms-3"></script><script src="./economy.js?v=rail-platforms-3"></script><script src="./finance-charts.js"></script><script src="./route-overlay.js"></script><script src="./hud.js"></script><script src="./network-ui.js?v=rail-platforms-3"></script><script src="./road-builder.js?v=rail-platforms-3"></script><script src="./rail-builder.js?v=rail-platforms-3"></script>
 <script>
 (() => {
 'use strict';
@@ -979,10 +979,12 @@ function prepareTransport(valley){
   }
   for(const station of Object.values(valley.transport.railStations??{})){
     stationsByKey.set(contourStationKey(station),station);
-    const halfLength=(station.platformLength??2.4)*.5,reach=halfLength+1.7;
-    const center=station.terminal?halfLength:0;
-    const pad={...station,x:station.x+station.nx*.51-station.ny*center,y:station.y+station.ny*.51+station.nx*center};
-    insert({station:pad,railStation:station,reach,halfLength,halfDepth:.34},pad.x-reach,pad.y-reach,pad.x+reach,pad.y+reach);
+    const tracks=ContourRail.stationTrackCount(station,valley.transport);
+    const {start,end,normalMin,normalMax}=ContourRail.stationLayout(station,tracks);
+    const halfLength=(end-start)/2,halfDepth=(normalMax-normalMin)/2;
+    const center=(start+end)/2,side=(normalMax+normalMin)/2,reach=Math.hypot(halfLength,halfDepth)+1.7;
+    const pad={...station,x:station.x+station.nx*side-station.ny*center,y:station.y+station.ny*side+station.nx*center};
+    insert({station:pad,railStation:station,tracks,reach,halfLength,halfDepth},pad.x-reach,pad.y-reach,pad.x+reach,pad.y+reach);
   }
   for(const station of valley.transport.extraBays??[]){
     const key=contourStationKey(station);
@@ -1356,7 +1358,7 @@ function blockedByTransport(valley,lot){
   const x=lot.x,y=lot.y;
   for(const item of valley.transportBins.get(Math.floor(x)+','+Math.floor(y))??[]){
     if(item.railStation){
-      if(ContourRouteEditor.hitsStation(lot,item.railStation,lot.radius??.33))return true;
+      if(ContourRouteEditor.hitsStation(lot,item.railStation,lot.radius??.33,item.tracks))return true;
     }else if(item.station){
       const s=item.station,dx=x-s.x,dy=y-s.y;
       if(Math.abs(dx*s.nx+dy*s.ny)<(item.halfDepth??.48)+lot.radius&&Math.abs(dy*s.nx-dx*s.ny)<(item.halfLength??.70)+lot.radius)return true;
@@ -1452,10 +1454,27 @@ function followVehiclePose(){
 }
 function railActors(route,index,run,fleet,scale,actors){
   const staged=new Set();
+  function platformOccupied(side){
+    const station=route.stations[side],platform=route.platforms?.[side]??1;
+    return trial.transport.routes.some((other,i)=>{
+      if(other.mode!=='rail')return false;
+      const stop=other.stations.findIndex((s,j)=>s.id===station.id&&(other.platforms?.[j]??1)===platform);
+      if(stop<0)return false;
+      const run=trial.truckRuns[i],cargo=other.cargo??'passengers';
+      return trial.market.fleet(other).vehicles.some(vehicle=>{
+        const motion=vehicle.rail;
+        if(!motion?.active)return false;
+        const length=ContourRail.quote(vehicle.consist,cargo).length/ContourRail.metresPerUnit;
+        const span=ContourRail.trainSpan(run,vehicle,length);
+        const clearance=station.platformLength??2.4;
+        return stop===motion.from?span.tail<clearance:span.front>run.length-clearance;
+      });
+    });
+  }
   for(const vehicle of fleet){
     const from=vehicle.rail?.from??0;
     const idle=!vehicle.rail?.active;
-    if(idle&&staged.has(from))continue;
+    if(idle&&(staged.has(from)||platformOccupied(from)))continue;
     if(idle)staged.add(from);
     const units=[
       ...(vehicle.consist?.locomotives??[]).map(id=>({id,part:ContourRail.locomotives[id],kind:'locomotive'})),
@@ -1466,20 +1485,19 @@ function railActors(route,index,run,fleet,scale,actors){
     const lead=ContourRail.pose(run,vehicle);
     if(!lead)continue;
     if(!visibleAsset(lead.x,lead.y,lead.z,16+scale*(1+length)))continue;
-    const runLength=run.length;
     const distance=(vehicle.rail?.distance??0)/unitScale;
-    const headMargin=Math.min(.045,runLength*.1);
-    const shift=clamp(distance,Math.min(length+headMargin,runLength-headMargin),runLength-headMargin)-distance;
+    const {front}=ContourRail.trainSpan(run,vehicle,length);
+    const shift=front-distance;
+    const facingArrival=idle&&(vehicle.rail?.travelElapsed??0)>0;
     let position=0;
     for(const unit of units){
       const unitLength=unit.part.length/unitScale;
       const center=position+unitLength*.5;
-      const reverse=lead.direction<0;
-      const offset=(reverse?length-center:center)-shift;
+      const offset=(facingArrival?length-center:center)-shift;
       const a=ContourRail.pose(run,vehicle,offset+unitLength*.25);
       const b=ContourRail.pose(run,vehicle,offset-unitLength*.25);
       const dx=b.x-a.x,dy=b.y-a.y,dz=b.z-a.z;
-      const yaw=Math.atan2(dy,dx)+(reverse?Math.PI:0),pitch=Math.atan2(reverse?-dz:dz,Math.hypot(dx,dy));
+      const yaw=Math.atan2(dy,dx)+(facingArrival?Math.PI:0),pitch=Math.atan2(facingArrival?-dz:dz,Math.hypot(dx,dy));
       const pose={x:(a.x+b.x)/2,y:(a.y+b.y)/2,z:(a.z+b.z)/2+.048};
       const model=ContourRailAssets.vehicle(unit.id,unitLength,unit.kind);
       actors.push(modelActor(model,pose.x,pose.y,pose.z,yaw,[1,1,1],pitch));
@@ -1699,56 +1717,82 @@ function builtStation(s,apron=false,includeAccess=true){
   if(access.length)cityRoad({nodes:access,bridge:false,loop:false});
 }
 
-function railPlatform(station,previewTracks){
-  const tracks=Object.values(trial.transport.railTracks??{}).filter(t=>t.from===station.id||t.to===station.id);
-  const closest=tracks.find(t=>t.tracks===2)??tracks[0];
-  const double=(previewTracks??closest?.tracks)===2;
-  const tx=-station.ny,ty=station.nx;
-  const angle=Math.atan2(ty,tx);
-  const halfLength=(station.platformLength??2.4)*.5;
-  const center=station.terminal?halfLength:0;
-  const outside=double?.215:.083,depth=.43;
-  const outline=(start,end,near,far)=>[[start,near],[end,near],[end,far],[start,far]].map(([along,side])=>[
-    station.x+tx*(along+center)+station.nx*side,station.y+ty*(along+center)+station.ny*side
-  ]);
-  solid(outline(-halfLength,halfLength,outside,outside+depth),station.z-.045,.133,'#aa9d87',{cap:'#c2b297'});
-  solid(outline(-halfLength,halfLength,outside+.022,outside+.042),station.z+.087,.006,'#e3cf9a');
-  if(double){
-    solid(outline(-halfLength,halfLength,-outside-.23,-outside),station.z-.045,.133,'#a99b84',{cap:'#bcae94'});
-    solid(outline(-halfLength,halfLength,-outside-.042,-outside-.022),station.z+.087,.006,'#e3cf9a');
+function railPlatform(station,previewTracks,showTracks=false){
+  const trackCount=previewTracks??ContourRail.stationTrackCount(station,trial.transport);
+  const layout=ContourRail.stationLayout(station,trackCount);
+  const {start,end,lanes,pads}=layout,center=(start+end)/2;
+  const angle=Math.atan2(station.nx,-station.ny);
+  const outline=(from,to,near,far)=>[[from,near],[to,near],[to,far],[from,far]].map(([along,normal])=>{
+    const {x,y}=ContourRail.stationPoint(station,along,normal);
+    return [x,y];
+  });
+  if(showTracks){
+    for(const {offset} of lanes){
+      const first=station.terminal?start:start-.25,last=end+.25;
+      const intervals=Math.ceil((last-first)/.15);
+      const points=Array.from({length:intervals+1},(_,i)=>
+        ContourRail.stationPoint(station,mix(first,last,i/intervals),offset));
+      layers.push(...ContourRailAssets.trackMesh({points,tracks:1},()=>false));
+    }
   }
-  for(const offset of [-halfLength+.10,halfLength-.10]){
-    const p=outline(offset-.015,offset+.015,outside+.10,outside+.39);
-    solid(p,station.z+.088,.006,'#a09176');
+  for(const {near,far,edges} of pads){
+    solid(outline(start,end,near,far),station.z-.045,.133,'#aa9d87',{cap:'#c2b297'});
+    for(const edge of edges){
+      const inset=edge===near?.022:-.042;
+      solid(outline(start,end,edge+inset,edge+inset+.020),station.z+.087,.006,'#e3cf9a');
+    }
+    for(const along of [start+.10,end-.10]){
+      solid(outline(along-.015,along+.015,near+.10,far-.04),station.z+.088,.006,'#a09176');
+    }
   }
   const model=contourBiomeModel('westernBuilding','Rail depot');
   const k=Math.min(.17,.85/model.width);
-  const depotSide=outside+depth*.78;
-  layers.push(...actorFaces(modelActor(model.mesh,station.x+tx*center+station.nx*depotSide,
-    station.y+ty*center+station.ny*depotSide,station.z+.089,angle,[k,k,k])));
+  const depot=ContourRail.stationPoint(station,center,pads[0].near+(pads[0].far-pads[0].near)*.78);
+  layers.push(...actorFaces(modelActor(model.mesh,depot.x,depot.y,station.z+.089,angle,[k,k,k])));
+  if(pads.length>1){
+    const secondary=pads[1],middle=(secondary.near+secondary.far)/2;
+    for(const along of [center-.31,center+.31]){
+      solid(outline(along-.018,along+.018,middle-.018,middle+.018),station.z+.089,.18,'#675846');
+    }
+    solid(outline(center-.41,center+.41,middle-.13,middle+.13),station.z+.267,.036,'#77705f',{cap:'#8b8370'});
+  }
   if(station.terminal){
-    const p=closest?.points[closest.from===station.id?1:closest.points.length-2];
-    const yaw=p?Math.atan2(p.y-station.y,p.x-station.x):angle;
-    layers.push(...actorFaces(modelActor(ContourRailAssets.buffers(double?2:1),station.x,station.y,station.z,yaw,[1,1,1])));
+    const buffer=ContourRailAssets.buffers(1);
+    for(const {offset} of lanes){
+      const p=ContourRail.stationPoint(station,start,offset);
+      layers.push(...actorFaces(modelActor(buffer,p.x,p.y,p.z,angle,[1,1,1])));
+    }
   }
 }
 
-function railPlatformMarker(station){
-  const center=station.terminal?(station.platformLength??2.4)*.5:0;
-  return {x:station.x+station.nx*.39-station.ny*center,y:station.y+station.ny*.39+station.nx*center,z:station.z+.090,
-    angle:Math.atan2(station.nx,-station.ny),station,mode:'rail',name:station.name+' rail station'};
+function railPlatformMarker(station,platformIndex=1){
+  const layout=ContourRail.stationLayout(station,ContourRail.stationTrackCount(station,trial.transport));
+  const pad=layout.platforms.find(platform=>platform.index===platformIndex)??layout.platforms[0];
+  const point=ContourRail.stationPoint(station,(layout.start+layout.end)/2,(pad.near+pad.far)/2,station.z+.090);
+  return {...point,angle:Math.atan2(station.nx,-station.ny),station,mode:'rail',name:station.name+' rail station'};
 }
 function stationEditorFaces(station,apron,tracks){
   const sceneLayers=layers;
   layers=[];
   try{
-    if(station.mode==='rail')railPlatform(station,tracks);
+    if(station.mode==='rail')railPlatform(station,tracks,true);
     else builtStation(station,apron,false);
     return layers;
   }
   finally{layers=sceneLayers;}
 }
 
+function activeTrains(route){
+  return trial.market.fleet(route).vehicles.some(vehicle=>vehicle.rail?.active);
+}
+function validPlatforms(route){
+  return route.stations?.length===2&&route.stations.every((station,side)=>{
+    const count=station.platformCount??1,assigned=route.platforms?.[side]??1;
+    const existing=trial.transport.railStations?.[station.id]?.platformCount??1;
+    return Number.isInteger(count)&&count>=existing&&count<=3&&
+      Number.isInteger(assigned)&&assigned>=1&&assigned<=count;
+  });
+}
 function registerRail(transport,route,replace=false){
   const tracks=transport.railTracks??={},stations=transport.railStations??={};
   for(const track of route.trackPaths??[]){
@@ -1769,7 +1813,10 @@ function applySiteClearance(transport,roads,lots){
 }
 function buildTransport(route,roads=[],lots=route.removedLots??[]){
   if(route.capital>trial.market.state.cash)return false;
-  if(route.mode==='rail')registerRail(trial.transport,route,true);
+  if(route.mode==='rail'){
+    if(!validPlatforms(route))return 'Review the station platforms before building this route.';
+    registerRail(trial.transport,route,true);
+  }
   const {stationLayouts,...service}=route;
   if(stationLayouts&&Object.keys(stationLayouts).length)Object.assign(trial.transport.stationLayouts??={},stationLayouts);
   route=service;
@@ -3547,6 +3594,9 @@ function updateRailRoute(index,changes){
   if(route?.mode!=='rail')return false;
   const {capital=0,removedLots=[],removedRoads=[],...plan}=changes;
   if(capital>trial.market.state.cash)return false;
+  if(!validPlatforms(plan))return 'Review the station platforms before saving this route.';
+  const changedPlatform=plan.stations.some((_,i)=>(plan.platforms?.[i]??1)!==(route.platforms?.[i]??1));
+  if(changedPlatform&&activeTrains(route))return 'Hold the trains at a station before changing their platform.';
   if((route.cargo==='passengers')!==(plan.cargo==='passengers')&&trial.market.fleet(route).vehicles.length){
     return 'Retire trains before switching between passenger and freight service.';
   }
@@ -3555,8 +3605,7 @@ function updateRailRoute(index,changes){
     route.trackIds?.length===plan.trackIds?.length&&route.trackIds?.every((id,i)=>id===plan.trackIds[i]&&
       route.trackDirections?.[i]===plan.trackDirections?.[i])&&route.points.length===plan.points.length&&
     route.points.every((point,i)=>point.x===plan.points[i].x&&point.y===plan.points[i].y&&point.z===plan.points[i].z);
-  const running=other=>trial.market.fleet(other).vehicles.some(v=>v.rail?.active);
-  if(!sameService&&running(route))return 'Wait for the assigned trains to finish their trips before rerouting.';
+  if(!sameService&&activeTrains(route))return 'Wait for the assigned trains to finish their trips before rerouting.';
   for(const track of plan.trackPaths??[]){
     const built=transport.railTracks?.[track.id];
     if(!built||built.points===track.points)continue;
@@ -3570,7 +3619,7 @@ function updateRailRoute(index,changes){
     const before=transport.railTracks?.[track.id];
     return before&&before.tracks!==track.tracks;
   }).map(track=>track.id));
-  if(upgraded.size&&transport.routes.some(other=>other.mode==='rail'&&other.trackIds?.some(id=>upgraded.has(id))&&running(other))){
+  if(upgraded.size&&transport.routes.some(other=>other.mode==='rail'&&other.trackIds?.some(id=>upgraded.has(id))&&activeTrains(other))){
     return 'Wait for trains using this section to finish their trips before adding a track.';
   }
   if(!sameService){
@@ -3588,9 +3637,22 @@ function updateRailRoute(index,changes){
   refreshRailway();
   return true;
 }
-function updateRailStation(station,{capital=0,removedRoads=[],removedLots=[]}={}){
-  if(!trial.transport.railStations?.[station.id]||capital>trial.market.state.cash)return false;
-  applySiteClearance(trial.transport,removedRoads,removedLots);
+function updateRailStation(station,{capital=0,removedRoads=[],removedLots=[],assignments=[]}={}){
+  const transport=trial.transport,built=transport.railStations?.[station.id];
+  if(!built||capital>trial.market.state.cash)return false;
+  const count=station.platformCount??1;
+  if(!Number.isInteger(count)||count<(built.platformCount??1)||count>3)return 'Review the platform layout.';
+  for(const {index,side,platform} of assignments){
+    const route=transport.routes[index];
+    if(route?.mode!=='rail'||route.stations[side]?.id!==station.id||
+      !Number.isInteger(platform)||platform<1||platform>count)return 'The platform assignment is no longer available.';
+    if(platform!==(route.platforms?.[side]??1)&&activeTrains(route))return 'Hold the trains at a station before changing their platform.';
+  }
+  for(const {index,side,platform} of assignments){
+    const route=transport.routes[index];
+    (route.platforms??=[1,1])[side]=platform;
+  }
+  applySiteClearance(transport,removedRoads,removedLots);
   if(capital)trial.market.book('capital',capital);
   Object.assign(trial.transport.railStations[station.id],station,{mode:'rail'});
   refreshRailway();

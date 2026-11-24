@@ -71,6 +71,8 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
   const isRail=route=>route?.mode==='rail';
   const isRailPlatform=platform=>isRail(platform)||isRail(platform.station);
   const transportMode=route=>isRail(route)?'rail':'road';
+  const railPlatformCount=(transport,station)=>(transport.railStations?.[station.id]??station).platformCount??1;
+  const assignedPlatform=(route,side)=>route.platforms?.[side]??1;
   function inspectRoutes(indices){
     if(indices.length===1){inspectRoute(indices[0]);return;}
     routeChoices=indices;
@@ -298,6 +300,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     const waiting=s.vehicles.filter(v=>v.waiting==='orders').length;
     const filling=s.vehicles.filter(v=>v.waiting==='filling').length;
     const waitingInputs=s.vehicles.filter(v=>v.waiting==='inputs').length;
+    const crossing=s.vehicles.filter(v=>v.waiting==='crossing').length;
     const queued=s.vehicles.filter(v=>(rail||r.local||!m.staged(routeIndex,v))&&['bay','traffic','signal'].includes(v.waiting)).length;
     const last=s.lastMonth,net=last?profit(last):null;
     const signed=n=>(n>0?'+':n<0?'−':'')+cash(Math.abs(n));
@@ -321,6 +324,8 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     else if(waitingInputs)overview.append(node('p','Pickup waiting for the factory’s inputs.','inspectorNotice'));
     else if(queued)overview.append(node('p',queued+' '+(queued===1?noun:plural)+' queued','inspectorNotice'));
     else if(waiting)overview.append(node('p',freight?waiting+' waiting for orders or storage space.':'Waiting for passengers.','inspectorNotice'));
+    if(crossing&&!rail)overview.append(node('p',crossing===1?
+      'One '+noun+' waiting for a train to clear the crossing.':crossing+' '+plural+' waiting for trains to clear crossings.','inspectorNotice'));
     data.append(node('h3','Monthly throughput'),
       row('Completed last month',actual??'Pending'),row('Estimated with current fleet',Math.round(potential)),
       node('small','Potential assumes full loads and standard stop times. Queues, extra loading waits and demand affect actual throughput.'),
@@ -334,19 +339,24 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       row('Vehicle distance',s.km.toFixed(2)+' km'),row(r.local?'Setup cost':rail?'Track construction':'Road construction',r.capital?cash(r.capital):rail?'—':'Legacy road'),
       row(rail?'Queued on track':'Queued on road',queued),row('Waiting to unload',blocked),row('Waiting to fill',filling),row('Finishing before removal',retiring),
       row(freight?'Waiting for orders':'Waiting for riders',waiting));
+    if(crossing)data.append(row(rail?'Waiting at level crossings':'Waiting for trains at crossings',crossing));
     if(r.local){
       data.append(row('Loop length',Math.round(r.length*40)+' m'),row('Stops',r.stops.length),
         row(freight?m.kind(r)+' available at station':'Riders awaiting intercity service',freight?m.localStock(r):m.waitingAt(r.hub).length));
     }
-    for(const station of r.stations){
+    const stationData=rail?node('div','','stationPlatformData'):data;
+    if(rail)stationData.append(node('h3','Station platforms'));
+    for(const [side,station] of r.stations.entries()){
       const key=ContourTown.stationKey(station),platform=valley.platforms?.get(key);
-      if(!freight)data.append(row(station.name+' station · waiting',m.waitingAt(key).length));
-      data.append(row(station.name,m.isIndustry(m.source(station))?(rail?'Industry platform':'Industry loading bay'):m.catchment(station).length+' homes in range'));
-      if(platform)data.append(button('Open '+station.name+' station',()=>{
+      const assignment=rail?'Platform '+assignedPlatform(r,side)+' of '+railPlatformCount(valley.transport,station):'';
+      if(!freight)stationData.append(row(station.name+' station · waiting',m.waitingAt(key).length));
+      stationData.append(row(station.name,m.isIndustry(m.source(station))?(rail?'Industry platform':'Industry loading bay'):m.catchment(station).length+' homes in range'));
+      if(platform)stationData.append(button(rail?station.name+' · '+assignment:'Open '+station.name+' station',()=>{
         selectedStop={key,platform};open('stop');
       },'menuItem'));
+      else if(rail)stationData.append(row(station.name,assignment));
     }
-    if(rail){renderRailManagement(valley,r,s,cargo);return;}
+    if(rail){data.prepend(stationData);renderRailManagement(valley,r,s,cargo);return;}
     footer.querySelector('.removeVehicle').disabled=count===retiring;
     if(!r.local){
       data.append(node('h3','Station bays'));
@@ -382,6 +392,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     const unit=cargo==='passengers'?'riders':'loads';
     const kmh=speed=>Math.round(speed??0)+' km/h';
     const waits={block:'Waiting for clear track',signal:'Waiting for a signal',meet:'Waiting for opposing train',
+      crossing:'Waiting at the level crossing',
       traffic:'Waiting for clear track',bay:'Waiting for platform',platform:'Waiting for platform',orders:'Waiting for orders',
       filling:'Loading',storage:'Waiting for storage',inputs:'Waiting for inputs',loading:'Loading',station:'At station',
       departure:'Awaiting departure',track:'Waiting for clear track',traction:'Insufficient tractive effort',
@@ -861,13 +872,17 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     const bays=!rail&&p.station&&v.transport.stationLayouts?.[window.contourStationKey(p.station)]?.bays;
     if(rail){
       const station=p.station??p;
-      const served=v.transport.routes.map((route,index)=>({route,index})).filter(({route})=>
-        isRail(route)&&route.stations.some(stop=>ContourTown.stationKey(stop)===key));
+      const served=v.transport.routes.flatMap((route,index)=>isRail(route)?route.stations.flatMap((stop,side)=>
+        ContourTown.stationKey(stop)===key?[{route,index,side}]:[]):[]);
       const heading=node('div','','inspectorContext inspectorService');
       heading.append(hud.icon('train'),document.createTextNode('Rail · '+(station.terminal||station.kind==='terminal'?'Terminal':'Through station')));
-      overview.append(heading,stats(['Platform',Math.round((station.platformLength??2.4)*ContourRail.metresPerUnit)+' m'],
-        ['Lines',served.length]));
-      for(const {route,index} of served)data.append(button('Line '+(index+1)+' · '+routeName(route),()=>inspectRoute(index),'menuItem'));
+      overview.append(heading,stats(['Platform length',Math.round((station.platformLength??2.4)*ContourRail.metresPerUnit)+' m'],
+        ['Platform tracks',railPlatformCount(v.transport,station)],['Lines',served.length]));
+      if(served.length)data.append(node('h3','Platform assignments'));
+      for(const {route,index,side} of served){
+        data.append(button('Platform '+assignedPlatform(route,side)+' · Line '+(index+1)+' → '+route.stations[1-side].name,
+          ()=>inspectRoute(index),'menuItem'));
+      }
     }
     if(bays?.length>1){
       const chooser=node('div','','inspectorCargoList');
