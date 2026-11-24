@@ -270,7 +270,7 @@
         const station=node===track?.from?profile?.start:profile?.end;
         return station?.mixed?1:undefined;
       }
-      return {id,tracks:track?.tracks===2?2:1,direction,length,from:track?.from,to:track?.to,profile,
+      return {id,runningTrack:route.runningTrack,tracks:track?.tracks===2?2:1,direction,length,from:track?.from,to:track?.to,profile,
         startPlatform:assigned(track?.from),endPlatform:assigned(track?.to)};
     });
     if(!blocks.length)blocks.push({id:'route:'+JSON.stringify(route.stations?.map(s=>s.id??[s.x,s.y])),tracks:1,direction:1,length:path.at(-1).length});
@@ -284,7 +284,7 @@
       if(!profile)continue;
       for(const [station,atStart,platform] of [[profile.start,true,block.startPlatform],[profile.end,false,block.endPlatform]]){
         if(!station||!platform)continue;
-        const mains=profile.tracks===2?[-laneOffset,laneOffset]:[0];
+        const mains=profile.tracks===2?[...new Set([runningLane(block,0),runningLane(block,1)])].map(lane=>lane*laneOffset):[0];
         const deflection=Math.max(...mains.map(main=>Math.abs(laneAt(station,main,platform)-main)));
         if(deflection<.001)continue;
         const radius=station.turnout**2*metresPerUnit/(6*deflection);
@@ -327,8 +327,14 @@
     }
     return lo;
   }
+  // Lane sign is relative to the stored section geometry. A/B describe the service endpoints.
+  function runningLane(block,from){
+    if(block.tracks!==2)return 0;
+    const right=block.runningTrack==='right'||(block.runningTrack!=='left'&&from===1);
+    return (right?1:-1)*block.direction;
+  }
   function blockKeys(run,from){
-    return [...run.blocks.map(block=>'track:'+block.id+(block.tracks===2?'/'+(from?-block.direction:block.direction):'')),
+    return [...run.blocks.map(block=>'track:'+block.id+(block.tracks===2?'/'+(-runningLane(block,from)):'')),
       ...run.switches.map(end=>'junction:'+end),...run.crossings];
   }
   const speedForCurve=radius=>Math.sqrt(Math.max(3,radius)*.85);
@@ -438,9 +444,10 @@
     const dx=(b.x-a.x)/span,dy=(b.y-a.y)/span;
     const block=run.blocks.find(block=>distance<=block.end)??run.blocks.at(-1);
     const offset=local=>{
-      if(!block.profile)return block.tracks===2?-direction*laneOffset:0;
+      const lane=runningLane(block,state.from);
+      if(!block.profile)return block.direction*lane*laneOffset;
       const canonical=block.direction===1?local:block.length-local;
-      return block.direction*trackLateral(block.profile,canonical,-direction*block.direction,block.startPlatform,block.endPlatform);
+      return block.direction*trackLateral(block.profile,canonical,lane,block.startPlatform,block.endPlatform);
     };
     const local=distance-block.start,lateral=offset(local);
     const lateralSlope=(offset(local+.01)-offset(local-.01))/.02;
@@ -448,5 +455,5 @@
     return {x:a.x+(b.x-a.x)*f-dy*lateral,y:a.y+(b.y-a.y)*f+dx*lateral,z:a.z+(b.z-a.z)*f,
       tunnel:Boolean((f<.5?a:b).tunnel),yaw,angle:yaw,pitch:Math.atan2((b.z-a.z)*direction,span),direction};
   }
-  window.ContourRail={locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trainSpan};
+  window.ContourRail={locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,runningLane,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trainSpan};
 })();

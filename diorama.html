@@ -197,7 +197,7 @@ canvas:active{cursor:grabbing}
     <div class="editorCrossings" id="teCrossings" hidden></div>
     <div class="teActions"><button id="teUndo">Undo point</button><button id="teConfirm" class="buy">Build</button></div></div>
 </dialog>
-<script src="./demolition.js"></script><script src="./grade-separation.js?v=crossing-design-1"></script><script src="./town-network.js?v=crossing-design-1"></script><script src="./town-editor.js?v=crossing-design-1"></script><script src="./valley-assets.js"></script><script src="./biome-assets.js"></script><script src="./region.js"></script><script src="./freight.js"></script><script src="./rail-sim.js?v=crossing-design-1"></script><script src="./rail-assets.js?v=crossing-design-1"></script><script src="./crossings.js?v=rail-platforms-3"></script><script src="./economy.js?v=crossing-design-1"></script><script src="./finance-charts.js"></script><script src="./route-overlay.js"></script><script src="./hud.js"></script><script src="./network-ui.js?v=crossing-design-1"></script><script src="./road-builder.js?v=crossing-design-1"></script><script src="./rail-builder.js?v=crossing-design-1"></script>
+<script src="./demolition.js"></script><script src="./grade-separation.js?v=crossing-design-1"></script><script src="./town-network.js?v=crossing-design-1"></script><script src="./town-editor.js?v=crossing-design-1"></script><script src="./valley-assets.js"></script><script src="./biome-assets.js"></script><script src="./region.js"></script><script src="./freight.js"></script><script src="./rail-sim.js?v=running-track-1"></script><script src="./rail-assets.js?v=crossing-design-1"></script><script src="./crossings.js?v=rail-platforms-3"></script><script src="./economy.js?v=running-track-1"></script><script src="./finance-charts.js"></script><script src="./route-overlay.js"></script><script src="./hud.js"></script><script src="./network-ui.js?v=running-track-1"></script><script src="./road-builder.js?v=crossing-design-1"></script><script src="./rail-builder.js?v=running-track-1"></script>
 <script>
 (() => {
 'use strict';
@@ -3675,6 +3675,7 @@ function updateRailRoute(index,changes){
   if(capital>trial.market.state.cash)return false;
   if(!validPlatforms(plan))return 'Review the station platforms before saving this route.';
   const changedPlatform=plan.stations.some((_,i)=>(plan.platforms?.[i]??1)!==(route.platforms?.[i]??1));
+  if((plan.runningTrack??'auto')!==(route.runningTrack??'auto')&&activeTrains(route))return 'Hold the trains at a station before changing their running track.';
   if(changedPlatform&&activeTrains(route))return 'Hold the trains at a station before changing their platform.';
   if((route.cargo==='passengers')!==(plan.cargo==='passengers')&&trial.market.fleet(route).vehicles.length){
     return 'Retire trains before switching between passenger and freight service.';

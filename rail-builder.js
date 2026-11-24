@@ -532,6 +532,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
     if(capital>getValley().market.state.cash){showIssue('The available balance will not cover this work.');return;}
     const points=preview.legs.flatMap((leg,i)=>(i?leg.points.slice(1):leg.points).map(cleanPoint));
     const route={mode:'rail',capital,cargo,cargoFrom:service.from.id,points,removedLots:preview.lots,removedRoads:preview.roads,
+      runningTrack:preview.legs.some(leg=>leg.track.tracks===2)?state.runningTrack??'auto':'auto',
       platforms:state.stations.map((_,side)=>assignedPlatform(side)),
       stations:state.stations.map(s=>({...s,platformCount:platforms(s),tie:committedStation(s)?.tie??roadTie(s,preview.roads)})),
       trackPaths:preview.legs.map(l=>l.track),trackIds:preview.legs.map(l=>l.track.id),trackDirections:preview.legs.map(l=>l.direction)};
@@ -698,6 +699,12 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
       platformDetails.open=Boolean(state.platformDetails);
       platformDetails.ontoggle=()=>{if(platformDetails.isConnected)state.platformDetails=platformDetails.open;};
       fields.push(platformDetails);
+    }
+    if(preview.legs.some(leg=>leg.track.tracks===2)){
+      fields.push(select('Running track',[
+        ['auto','Automatic · by direction'],['left','Left from A · both ways'],['right','Right from A · both ways']
+      ],state.runningTrack??'auto',value=>change(()=>{state.runningTrack=value;})));
+      if(state.runningTrack==='left'||state.runningTrack==='right')stats.push('Both ways on the '+state.runningTrack+' track from A');
     }
     const pending=state.stations.flatMap(s=>stationConflicts(s,stationTrackCount(s,preview.legs))).filter(row=>!roadsMarked().includes(row.key)&&!protectedRoad(row.key));
     if(pending.length)fields.push(button('Mark conflicting streets',()=>markRoads(pending)));
@@ -890,6 +897,20 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
         if(points[1].tunnel){ctx.setLineDash([4,3]);path(points,'#405f85',4);ctx.setLineDash([]);}
       }
       if(active)for(const bend of current().handles)mark(bend,4,'#fff6cd');
+    }
+    if(state.runningTrack==='left'||state.runningTrack==='right'){
+      const side=state.runningTrack==='right'?1:-1;
+      // Keep both rails distinguishable even when zoomed out to the whole route.
+      for(const leg of preview?.legs??[]){
+        if(leg.track.tracks!==2)continue;
+        const offset=side*Math.max(.13,3/scaleHint);
+        const rails=leg.points.map((p,i)=>{
+          const a=leg.points[Math.max(0,i-1)],b=leg.points[Math.min(i+1,leg.points.length-1)];
+          const length=distance(a,b)||1;
+          return {x:p.x-(b.y-a.y)*offset/length,y:p.y+(b.x-a.x)*offset/length};
+        });
+        path(rails,'#176656',3);
+      }
     }
     const platform=(s,highlight)=>{
       const trackCount=stationTrackCount(s,preview?.legs);
@@ -1195,7 +1216,7 @@ window.createRailBuilder=function({getValley,bounds,heightScale,draftKey,begin,f
         const {from,to}=directed(track,route.trackDirections?.[i]===-1?track.to:track.from);
         return {trackId:id,from,to};
       }).filter(Boolean);
-      state={step:2,places:endpoints.map(s=>s.place),stations:endpoints,legs,legTracks:1,active:0,tool:'shape',profile:false,platforms:route.platforms?.slice()??[1,1],cargo:(route.cargo??'passengers')+'|'+route.cargoFrom};
+      state={step:2,places:endpoints.map(s=>s.place),stations:endpoints,legs,runningTrack:route.runningTrack??'auto',legTracks:1,active:0,tool:'shape',profile:false,platforms:route.platforms?.slice()??[1,1],cargo:(route.cargo??'passengers')+'|'+route.cargoFrom};
       if(!legs.length)initializeLegs();
       open();
     },

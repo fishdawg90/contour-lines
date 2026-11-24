@@ -350,7 +350,13 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
         row(freight?m.kind(r)+' available at station':'Riders awaiting intercity service',freight?m.localStock(r):m.waitingAt(r.hub).length));
     }
     const stationData=rail?node('div','','stationPlatformData'):data;
-    if(rail)stationData.append(node('h3','Station platforms'));
+    if(rail){
+      if(valley.truckRuns?.[routeIndex]?.blocks.some(block=>block.tracks===2)){
+        const fixed=r.runningTrack==='left'||r.runningTrack==='right';
+        stationData.append(row('Running track',fixed?(r.runningTrack==='left'?'Left':'Right')+' from '+r.stations[0].name+' · both ways':'Automatic · by direction'));
+      }
+      stationData.append(node('h3','Station platforms'));
+    }
     for(const [side,station] of r.stations.entries()){
       const key=ContourTown.stationKey(station),platform=valley.platforms?.get(key);
       const assignment=rail?'Platform '+assignedPlatform(r,side)+' of '+railPlatformCount(valley.transport,station):'';

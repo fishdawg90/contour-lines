@@ -1074,7 +1074,7 @@ window.ContourEconomy = function(valley) {
         const cycle=timed.travel+timed.returnTravel+2*bayTime;
         return total+4*weekSeconds*timed.capacity*(isFreight(route)?1:2)/cycle;
       },0);
-      const lanes=run?.blocks.length&&run.blocks.every(block=>block.tracks===2)&&!run.switches.length&&!run.crossings.length?2:1;
+      const lanes=run?.blocks.length&&run.blocks.every(block=>block.tracks===2)&&!['left','right'].includes(route.runningTrack)&&!run.switches.length&&!run.crossings.length?2:1;
       return {actual,potential:potential*Math.min(1,lanes/Math.max(1,cycles.length))};
     }
     const run=valley.truckRuns?.[index];
@@ -1357,8 +1357,8 @@ window.ContourEconomy = function(valley) {
         const lane=profile.layout.lanes.find(lane=>lane.index===(platform??1));
         const keys=[lane?platformKey:key+'/platform-1'];
         if(block.tracks===2){
-          const direction=(from?1:-1)*block.direction;
-          const offset=(lane?.offset??0)*profile.side;
+          const direction=rail.runningLane(block,from)*profile.side;
+          const offset=lane?.offset??0;
           // A train crossing the centre of a double-track approach fouls the opposing running line.
           keys.push(key+'/throat/'+direction);
           if(offset*direction<0)keys.push(key+'/throat/'+(-direction));
