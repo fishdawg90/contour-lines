@@ -443,7 +443,7 @@ window.ContourEconomy = function(valley) {
       const score=tripStatus?(covered.has(lot.id)?passengerRate(entry,trip?.overdue,trip?.aboard):null):ratio(entry);
       const unmet=tripStatus?score===0||!covered.has(lot.id):due>1e-8||!covered.has(lot.id);
       const status=score>=.999?'full':score>0?'partial':unmet?'unmet':'pending';
-      return {lot,ratio:score,status,demand,served,withinGrace,covered:covered.has(lot.id)};
+      return {lot,ratio:score,status,demand,served,withinGrace,covered:covered.has(lot.id),lastGoods:history[state.week-1]?.[key]?.goods};
     });
   }
 
@@ -678,21 +678,69 @@ window.ContourEconomy = function(valley) {
     if(industry.goodMonths>=3)industry.level=2;
     industry.monthUsed=0;
   }
+  // Whole loads stay in town inventory until opened. Any remainder stays at its delivery point.
+  function deliveryBins(city,cargo){
+    const towns=state.householdDeliveries??={};
+    return (towns[city.id]??={})[cargo]??={};
+  }
+  const deliveryPointKey=(point,local)=>JSON.stringify([local,point?.x,point?.y,point?.road]);
+  function storeDelivery(city,cargo,point,local,count){
+    if(!count)return;
+    const bins=deliveryBins(city,cargo);
+    const key=deliveryPointKey(point,local);
+    const bin=bins[key]??={point:point&&{x:point.x,y:point.y,z:point.z,road:point.road},local,units:0,open:0};
+    bin.units+=count;
+  }
+  function stationDelivery(city,cargo,station,count){
+    const anchor=townNetwork&&city.roads?townNetwork.stationAnchor(station,city):station;
+    storeDelivery(city,cargo,anchor,false,count);
+  }
+  function distributeGoods(city,cargo,lots,need,stock){
+    const bins=deliveryBins(city,cargo),byHome=new Map();
+    const unlocated=stock-Object.values(bins).reduce((sum,bin)=>sum+bin.units,0);
+    // Older saves pooled town stock. Attach that balance once to its first receiving station.
+    if(unlocated>1e-8){
+      const route=data.routes.find(r=>{const plan=routeTrade(r);return plan?.to===city&&plan.cargo===cargo;});
+      const station=route?.stations.find(s=>source(s)===city);
+      if(station)stationDelivery(city,cargo,station,unlocated);
+    }
+    const edges=[],perHome=need/(lots.length||1);
+    for(const bin of Object.values(bins)){
+      if(!bin.point||!perHome)continue;
+      const reach=bin.local?4.5:radius;
+      const nearby=townNetwork&&city.roads?townNetwork.getGraph(valley,city).homesByDistance(bin.point,lots,reach):
+        lots.map(lot=>({lot,distance:distance(lot,bin.point)})).filter(item=>item.distance<=reach);
+      for(const item of nearby)edges.push({...item,bin});
+    }
+    edges.sort((a,b)=>a.distance-b.distance||a.lot.id-b.lot.id);
+    let opened=0,served=0;
+    for(const {lot,bin} of edges){
+      const prior=byHome.get(lot.id)??0;
+      const amount=Math.min(perHome-prior,bin.units+bin.open);
+      if(amount<1e-8)continue;
+      const whole=Math.min(bin.units,Math.max(0,Math.ceil(amount-bin.open-1e-9)));
+      bin.units-=whole;opened+=whole;
+      bin.open=Math.max(0,bin.open+whole-amount);
+      byHome.set(lot.id,prior+amount);served+=amount;
+    }
+    for(const [key,bin] of Object.entries(bins))if(bin.units+bin.open<1e-8)delete bins[key];
+    return {opened,served,byHome};
+  }
   function closeWeek(){
     state.finance.history.push({...state.finance.current,cash:state.cash,week:state.week});
     if(state.finance.history.length>520)addFinanceMonth(financeArchive,state.finance.history.shift());
     state.finance.current={revenue:0,operating:0,capital:0};
     for(const city of valley.towns){
-      const lots=homes(city),reachable=timberCoverage(city);
-      const t=timberMarket(city),need=weeklyDemand(city),used=Math.min(t.stock,cargoNeed(city,'timber',reachable.size));
-      t.stock-=used;t.used+=used;t.monthUsed+=used;t.monthDemand+=need;
-      if(lots.length){
-        const perHome=need/lots.length;
-        const suppliedPerHome=reachable.size?Math.min(perHome,used/reachable.size):0;
-        for(const lot of lots)recordHomeService('timber',city.id,lot.id,state.week,perHome,
-          reachable.has(lot.id)?suppliedPerHome:0);
+      const lots=homes(city),results=new Map();
+      function distribute(cargo,stock,demand){
+        const result=distributeGoods(city,cargo,lots,demand,stock);
+        results.set(cargo,result);
+        return result;
       }
-      state.mill.credits+=used;state.mill.monthUsed+=used;
+      const t=timberMarket(city),need=weeklyDemand(city),timber=distribute('timber',t.stock,need);
+      t.stock-=timber.opened;t.used+=timber.served;t.monthUsed+=timber.served;t.monthDemand+=need;
+      for(const lot of lots)recordHomeService('timber',city.id,lot.id,state.week,need/lots.length,timber.byHome.get(lot.id)??0);
+      state.mill.credits+=timber.opened;state.mill.monthUsed+=timber.served;
       const stop=passengerStop(city);
       stop.lastWeek=stop.waiting;
       stop.waiting=0;stop.visits+=stop.lastWeek;
@@ -700,28 +748,26 @@ window.ContourEconomy = function(valley) {
       stop.monthDemand=(stop.monthDemand??0)+weeklyVisits(city);
       const growth=townProgress(city);
       t.lastQueuePenalty=growth.queuePenalty;
-      const consumed={timber:used};
-      const coverage=new Map([['timber',reachable]]);
-      function coveredHomes(cargo){
-        if(!coverage.has(cargo))coverage.set(cargo,freightCoverage(city,cargo));
-        return coverage.get(cargo);
-      }
-      freight?.consumeWeek(city,state.week%4===3,cargo=>coveredHomes(cargo).size,
-        (cargo,amount)=>{consumed[cargo]=amount;});
+      freight?.consumeWeek(city,state.week%4===3,distribute);
       const goodsWeek=hudHistory.goods[state.week]??={};
       const demands=townGoods(city);
+      const consumed=Object.fromEntries([...results].map(([cargo,result])=>[cargo,result.served]));
       goodsWeek[city.id]=Object.fromEntries(demands.map(({cargo,demand})=>[
         cargo,{requested:demand,completed:consumed[cargo]??0}
       ]));
       if(city.starterGoods&&lots.length){
-        const delivered=city.starterGoods.map(cargo=>{
-          const demand=cargo==='timber'?need:freight.weeklyDemand(city,cargo);
-          const covered=coveredHomes(cargo);
-          const served=covered.size&&demand?Math.min(1,(consumed[cargo]??0)*lots.length/(demand*covered.size)):0;
-          return {covered,served};
-        });
-        for(const lot of lots)recordHomeService('starter',city.id,lot.id,state.week,delivered.length,
-          delivered.reduce((sum,{covered,served})=>sum+(covered.has(lot.id)?served:0),0));
+        for(const lot of lots){
+          let fulfilled=0;
+          const delivered={};
+          for(const cargo of city.starterGoods){
+            const perHome=cargoNeed(city,cargo)/lots.length;
+            const served=results.get(cargo)?.byHome.get(lot.id)??0;
+            delivered[cargo]={served,demand:perHome};
+            if(perHome>0)fulfilled+=served/perHome;
+          }
+          recordHomeService('starter',city.id,lot.id,state.week,city.starterGoods.length,fulfilled);
+          homeService.starter[state.week][city.id+':'+lot.id].goods=delivered;
+        }
       }
       const scores=townSatisfaction(city);
       for(const {cargo,demand} of demands)updateSatisfaction(scores.goods,cargo,demand,consumed[cargo]??0);
@@ -1018,6 +1064,7 @@ window.ContourEconomy = function(valley) {
         credits[plan.cargo]=exact-Math.floor(exact);
         changeYardStock(key,plan.cargo,staged);
       }
+      if(!isIndustry(city))stationDelivery(city,plan.cargo,station,v.load-staged);
       freight.deliver(city,plan.cargo,v.load-staged,v.load);
       v.load=0;
       return;
@@ -1029,6 +1076,7 @@ window.ContourEconomy = function(valley) {
       const staged=yard?Math.max(0,Math.min(timberBuffer(city)-yard.timber,Math.floor(exact))):0;
       if(yard)yard.splitCredit=exact-Math.floor(exact);
       if(yard)yard.timber+=Math.max(0,staged);
+      stationDelivery(city,'timber',r.stations[dest],v.load-staged);
       received.timber+=v.load-Math.max(0,staged);
       market.inbound=Math.max(0,market.inbound-v.load);market.stock+=v.load-Math.max(0,staged);
     }else{
@@ -1608,12 +1656,17 @@ window.ContourEconomy = function(valley) {
       const hub=townNetwork.hubStations(valley,city).get(route.hub);
       const direct=new Set(hub&&!localDepot(city,route.hub,cargo)?catchment(hub,city).map(l=>l.id):[]);
       const reach=localCatchment(route,city,route.stops[event.stop]).filter(l=>!direct.has(l.id)).length;
-      const count=Math.min(vehicle.load,cargoNeed(city,cargo,reach),room);
+      const stop=route.stops[event.stop];
+      const bin=deliveryBins(city,cargo)[deliveryPointKey(stop,true)];
+      const waiting=(bin?.units??0)+(bin?.open??0);
+      const stopRoom=Math.max(0,Math.ceil(cargoNeed(city,cargo,reach)-waiting-1e-9));
+      const count=Math.min(vehicle.load,stopRoom,room);
       if(timber){
         market.stock+=count;
         const received=state.received[city.id]??={timber:0,passengers:0};
         received.timber+=count;
       }else freight.deliver(city,cargo,count,0);
+      storeDelivery(city,cargo,route.stops[event.stop],true,count);
       vehicle.load-=count;
       unloadLocalCargo(vehicle,point,count,trip);
       payLocal(service,vehicle,count,65,trip);

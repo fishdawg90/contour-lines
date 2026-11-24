@@ -174,14 +174,21 @@ function makeGraph(roads,elevationTolerance=.12){
   function sidewalkRoute(home,anchor){
     return pathBetween(entrance(home,1.15),entrance(anchor,.65));
   }
-  function catchment(anchor,lots,range=7){
+  function homesByDistance(anchor,lots,range=7){
     const start=nearest(anchor,.65,anchor.road);
     if(!start)return [];
     const {costs}=flood(start);
-    return lots.filter(lot=>{
+    const matches=[];
+    for(const lot of lots){
       const entrance=nearest(lot,1.15,lot.road);
-      return entrance&&(costs.get(entrance)??Infinity)+gap(lot,entrance)+gap(anchor,start)<=range;
-    });
+      if(!entrance)continue;
+      const distance=(costs.get(entrance)??Infinity)+gap(lot,entrance)+gap(anchor,start);
+      if(distance<=range)matches.push({lot,distance});
+    }
+    return matches;
+  }
+  function catchment(anchor,lots,range=7){
+    return homesByDistance(anchor,lots,range).map(match=>match.lot);
   }
   function roadsUsed(path){
     const points=new Set(path.map(p=>nearest(p,.001)).filter(Boolean));
@@ -203,7 +210,7 @@ function makeGraph(roads,elevationTolerance=.12){
     }
     return [...ids];
   }
-  return {nodes,nearest,path,entrance,pathBetween,sidewalkRoute,catchment,roadsUsed,segmentRoads};
+  return {nodes,nearest,path,entrance,pathBetween,sidewalkRoute,catchment,homesByDistance,roadsUsed,segmentRoads};
 }
 function stationAnchor(station,city){
   if(!station.tie)return null;

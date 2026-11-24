@@ -3,6 +3,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
   const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   let view='',overlay='routes',routeIndex=0,filter='',type='',mode='',listScroll=0,townId='';
   const cash=n=>Math.round(n).toLocaleString('en-GB')+' cr';
+  const amount=new Intl.NumberFormat('en-GB',{maximumFractionDigits:2});
   const profit=period=>period.revenue-period.expenses;
   let routeChoices=[],selectedStop,selectedHome,labels=true,financeEnd=null,financeRange=0,financeView='finances',statsTown='';
   let selectedTrain=null,railDraft=null,railFeedback='';
@@ -740,7 +741,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
         const demand=m.weeklyDemand(t);
         freightGoods.push({cargo:'timber',name:'Timber',unlock:0,demand,stock:timber.stock,inbound:timber.inbound,lastUsed:timber.lastUsed});
         data.append(row('Timber homes in range',coverage.timber+' / '+coverage.homes),
-          row('Timber used / needed last month',timber.lastDemand?timber.lastUsed+' / '+timber.lastDemand+' loads':'Pending'));
+          row('Timber used / needed last month',timber.lastDemand?amount.format(timber.lastUsed)+' / '+timber.lastDemand+' loads':'Pending'));
       }
       const level=growth.level;
       const next=level<3?3:level<5?5:null;
@@ -761,13 +762,13 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
         const value=good.demand?good.demand+' / week · '+good.stock+' stored · '+good.inbound+' en route':
           'Opens at level '+good.unlock;
         data.append(row(good.name,value));
-        if(good.lastUsed)data.append(row(good.name+' used last month',good.lastUsed));
+        if(good.lastUsed)data.append(row(good.name+' used last month',amount.format(good.lastUsed)));
         }
       }
     }
     if(!t.starterGoods)data.append(node('h3','Timber'),row('Weekly demand',m.weeklyDemand(t)+' loads'),row('En route',timber.inbound+' loads'),
       row('Delivered / used',(received.timber||0)+' / '+timber.used+' loads'),
-      row('Last month’s demand met',timber.lastDemand?timber.lastUsed+' / '+timber.lastDemand+' loads':'Pending'),
+      row('Last month’s demand met',timber.lastDemand?amount.format(timber.lastUsed)+' / '+timber.lastDemand+' loads':'Pending'),
       row('Homes served',coverage.timber+' / '+coverage.homes));
     data.append(row('Homes',coverage.homes),row('Expansion steps',growth.level),node('h3','Passengers waiting for'));
     for(const dest of valley.towns)if(dest!==t)data.append(row(dest.name,tot[dest.id]));
@@ -776,7 +777,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       (item.aboard?' · '+item.aboard+' aboard':'')+(item.overdue?' · '+item.overdue+' overdue':'')+
       (item.missed?' · '+item.missed+' gave up':'')));
     data.append(node('h3','Goods used / requested · recent weeks'));
-    for(const item of goods)data.append(row(item.name,item.completed+' / '+item.requested));
+    for(const item of goods)data.append(row(item.name,amount.format(item.completed)+' / '+item.requested));
     const totals=m.serviceTotals(t,'passengers');
     data.append(row('All residents’ trips completed / requested',totals.completed+' / '+totals.requested),
       row('Residents’ trips within grace',totals.withinGrace));
@@ -948,13 +949,19 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     const home=city&&m.homeSatisfaction(city,service).find(item=>item.lot.id===lotId);
     if(!home){overview.append(node('p','This home is no longer on the map.','inspectorNotice'));return;}
     const states={full:'Fully served',partial:'Partly served',unmet:'Unmet',pending:'No recent data'};
-    const starter=service==='starter',freight=service!=='passengers',amount=new Intl.NumberFormat('en-GB',{maximumFractionDigits:2});
+    const starter=service==='starter',freight=service!=='passengers';
     const units=starter?'':freight?' loads':' trips';
     overview.append(stats(['Service',states[home.status]],['Coverage',home.covered?'In range':'Out of range']),
       meters(meter('Satisfaction',home.ratio,{cargo:starter?null:freight?'timber':'passengers'})));
     data.append(row(starter?'Starter goods':freight?'Estimated demand':'Trips requested',starter?
         city.starterGoods.map(cargo=>ContourRegion.goods[cargo][0]).join(' + '):amount.format(home.demand)+units),
-      ...(starter?[]:[row(freight?'Estimated stock used':'Trips completed',amount.format(home.served)+units)]));
+      ...(starter?[]:[row(freight?'Stock used':'Trips completed',amount.format(home.served)+units)]));
+    if(starter&&home.lastGoods){
+      data.append(node('h3','Last week · supplied / needed'));
+      for(const [cargo,{served,demand}] of Object.entries(home.lastGoods)){
+        data.append(row(ContourRegion.goods[cargo][0],amount.format(served)+' / '+amount.format(demand)+' loads'));
+      }
+    }
     if(home.withinGrace>.001)data.append(row('Within grace period',amount.format(home.withinGrace)+units));
     if(freight){
       const weekly=starter?city.starterGoods.reduce((sum,cargo)=>sum+(cargo==='timber'?m.weeklyDemand(city):m.freight.weeklyDemand(city,cargo)),0):m.weeklyDemand(city);
@@ -963,8 +970,8 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     data.append(row('Activity counts','Last '+m.serviceWindow+' game weeks'),
       node('small',freight?'Satisfaction fades by 10% of its current value per week and recovers with service.':
         'Passenger satisfaction uses actual trips, including riders aboard and riders who waited too long.'),
-      node('small',starter?'Both starter goods have equal weight. Estimates use town consumption and each good’s station coverage.':
-        freight?'Timber is estimated from the stock the town consumed and which homes its routes can reach.':
+      node('small',starter?'Both starter goods have equal weight. Supplies go to homes nearest the receiving station or truck drop-off along connected streets.':
+        freight?'Timber serves nearby homes from the receiving station or the stop where a truck unloaded.':
           'Trips count towards the home that requested them when the passenger reaches the destination town.'));
   }
   function vRegionData(valley){
@@ -1060,7 +1067,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     serviceLegend.hidden=!service;
     if(service){
       el('serviceLegendTitle').textContent=service==='passengers'?'Passenger satisfaction':cargoLabel;
-      el('serviceLegendPeriod').textContent=service==='starter'?'Both starter goods':'Satisfaction fades weekly';
+      el('serviceLegendPeriod').textContent=service==='passengers'?'Satisfaction fades weekly':'Ring shows household satisfaction';
     }
     el('togglePassengerService').setAttribute('aria-pressed',String(service==='passengers'));
     el('toggleTimberService').setAttribute('aria-pressed',String(service==='timber'||service==='starter'));

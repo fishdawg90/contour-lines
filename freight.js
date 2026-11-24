@@ -80,12 +80,10 @@ window.ContourFreight=function({state,industries,homes,level,weekSeconds}){
       inventory.output+=produced;inventory.lastProduced=produced;inventory.produced+=produced;
     }
   }
-  function consumeWeek(town,lastWeekOfMonth,reachableHomes,onConsumption){
+  function consumeWeek(town,lastWeekOfMonth,distribute){
     for(const [cargo,entry] of Object.entries(data.towns[town.id]??{})){
-      const availableDemand=Math.min(entry.stock,weeklyDemand(town,cargo));
-      const amount=availableDemand?Math.min(availableDemand,weeklyDemand(town,cargo,reachableHomes(cargo))):0;
-      if(amount)onConsumption?.(cargo,amount);
-      entry.stock-=amount;entry.used+=amount;entry.monthlyUsed+=amount;
+      const {opened,served}=distribute(cargo,entry.stock,weeklyDemand(town,cargo));
+      entry.stock-=opened;entry.used+=served;entry.monthlyUsed+=served;
       if(lastWeekOfMonth){entry.lastUsed=entry.monthlyUsed;entry.monthlyUsed=0;}
     }
   }
