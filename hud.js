@@ -19,7 +19,12 @@ window.ContourHUD=(()=>{
     crate:'M3 4h14v12H3zm0 0 14 12m0-12L3 16',
     pot:'M6 3h8m-7 0v4c-6 4-3 10 3 10s9-6 3-10V3',
     bolt:'m11 2-6 9h5l-1 7 6-9h-5z',
-    bus:'M4 4h12v11H4zm0 7h12M6 15v2m8-2v2m-7-4h.01m6 0h.01'
+    bus:'M4 4h12v11H4zm0 7h12M6 15v2m8-2v2m-7-4h.01m6 0h.01',
+    train:'M5 4c0-2 10-2 10 0v9H5zm0 6h10m-7 3-3 5m7-5 3 5M7 16h6m-6-4h.01m6 0h.01',
+    mass:'M4 8h12l2 9H2zm4 0V6a2 2 0 0 1 4 0v2',
+    grade:'M2 16h16V5zm9-5 3 1 1-3',
+    curve:'M3 17v-4a10 10 0 0 1 10-10h4m-9 14v-4a5 5 0 0 1 5-5h4',
+    speed:'M3 16a8 8 0 1 1 14 0zm7-2 4-5m-8 3h.01m4-6h.01'
   };
   const cargoStyles={
     timber:['log','#eac17c'],stone:['stone','#c7c8c3'],fish:['fish','#88d5e1'],peat:['leaf','#b4a280'],
@@ -29,7 +34,9 @@ window.ContourHUD=(()=>{
     logs:['log','#cbb28a'],boards:['board','#ecc386'],produce:['leaf','#abd591'],fuel:['barrel','#efad75'],
     pine:['log','#a8cca5'],joinery:['board','#e7bc99'],kaolin:['rock','#e9ddd3'],ceramics:['pot','#f2b69f'],
     insulation:['cloth','#e7d2a2'],transit:['bus','#adbfef'],power:['bolt','#f4dc80'],
-    passengers:['bus','#87dce2'],depot:['crate','#e1c9a6']
+    passengers:['bus','#87dce2'],depot:['crate','#e1c9a6'],
+    train:['train','#d8b8fa'],mass:['mass','#d7cfb3'],grade:['grade','#eec887'],
+    curve:['curve','#abd6ed'],speed:['speed','#aedeb5']
   };
   const cargoLabel=cargo=>ContourRegion.goods[cargo]?.[0]??(cargo==='depot'?'Trading depot':'Passengers');
   const color=cargo=>cargoStyles[cargo]?.[1]??'#e7d8ba';

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="Build road services for the towns of a miniature valley.">
+<meta name="description" content="Build road and rail services for the towns and industries of a miniature landscape.">
 <title>Pocket Logistics</title>
 <style>
 :root{font-family:system-ui,sans-serif;color:#24332d;background:#f7f4e9;--ink:#24332d;--line:#d9dacb;--accent:#28564a}
@@ -44,6 +44,7 @@ canvas:active{cursor:grabbing}
 @media(max-width:400px){.controls{bottom:calc(var(--control-bottom) + 51px)}}
 </style>
 <link rel="stylesheet" href="./road-builder.css">
+<link rel="stylesheet" href="./rail-builder.css">
 <link rel="stylesheet" href="./network.css">
 </head>
 <body>
@@ -127,8 +128,9 @@ canvas:active{cursor:grabbing}
   <div class="panelHead"><h2 id="instructionsTitle">How to play</h2><form method="dialog"><button aria-label="Close instructions">×</button></form></div>
   <ol>
     <li><strong>Check demand.</strong> Tap a town to see what it needs, or an industry to see what it produces.</li>
-    <li><strong>Plan a route.</strong> Choose <em>New route → Town or industry route</em>. Connect two towns for passengers, or an industry to a place that accepts its cargo.</li>
-    <li><strong>Build and run it.</strong> Pick a bay at each end, reuse roads where possible, and review the cost. Use <em>Existing routes</em> to check deliveries, profit, and fleet size.</li>
+    <li><strong>Plan a route.</strong> Choose a road or rail route from <em>New route</em>. Connect two towns for passengers, or an industry to a buyer for its cargo.</li>
+    <li><strong>Build and run it.</strong> Place road bays or rail stations, connect them, and review the cost. Use through stations to connect more track later. A second track lets trains pass in opposite directions.</li>
+    <li><strong>Manage your fleet.</strong> Open <em>Existing routes</em> to check deliveries and profit, buy vehicles, and configure locomotives and cars.</li>
     <li><strong>Reach more homes.</strong> Add a local bus or delivery loop to connect streets around a station.</li>
   </ol>
   <p>Drag to pan and pinch to zoom. Tap the speed control to pause or speed up. Progress saves in this browser.</p>
@@ -191,7 +193,7 @@ canvas:active{cursor:grabbing}
   <div class="teBottom"><strong id="teStatus"></strong><p id="teHelp" class="editorGuide" aria-live="polite"></p>
     <div class="teActions"><button id="teUndo">Undo point</button><button id="teConfirm" class="buy">Build</button></div></div>
 </dialog>
-<script src="./town-network.js"></script><script src="./town-editor.js"></script><script src="./valley-assets.js"></script><script src="./biome-assets.js"></script><script src="./region.js"></script><script src="./freight.js"></script><script src="./economy.js"></script><script src="./finance-charts.js"></script><script src="./route-overlay.js"></script><script src="./hud.js"></script><script src="./network-ui.js"></script><script src="./road-builder.js"></script>
+<script src="./town-network.js"></script><script src="./town-editor.js"></script><script src="./valley-assets.js"></script><script src="./biome-assets.js"></script><script src="./region.js"></script><script src="./freight.js"></script><script src="./rail-sim.js"></script><script src="./rail-assets.js"></script><script src="./economy.js"></script><script src="./finance-charts.js"></script><script src="./route-overlay.js"></script><script src="./hud.js"></script><script src="./network-ui.js"></script><script src="./road-builder.js"></script><script src="./rail-builder.js"></script>
 <script>
 (() => {
 'use strict';
@@ -644,6 +646,13 @@ const industriesOf=valley=>valley.industries??[valley.industry];
 const placesOf=valley=>[...valley.towns,...industriesOf(valley),...(valley.market?.depots()??valley.publicDepots??[])];
 const saveKey=valley=>(valley.region==='mixed'?'contour-lines-mixed-roads-v1:':'contour-lines-test-roads-v1:')+valley.seed;
 const draftKey=valley=>(valley.region==='mixed'?'contour-mixed-route-draft:':'contour-route-draft:')+valley.seed;
+function updateRouteDraftButton(){
+  if(!trial)return;
+  try{
+    const key=draftKey(trial);
+    $('newRoute').textContent=localStorage.getItem(key)||localStorage.getItem(key+':rail')?'Resume route':'New route';
+  }catch{}
+}
 const seedKey=region=>region==='mixed'?'contour-lines-mixed-seed':'contour-lines-valley-seed';
 function mixedValley(seed){
   const valley=ContourRegion.generate(seed,trialStep);
@@ -911,7 +920,8 @@ function prepareTransport(valley){
     }
   }
   const model=window.roadEarthworks;
-  valley.truckRuns=valley.transport.routes.map(route=>truckRun(route,valley.transport));
+  for(const route of valley.transport.routes.filter(route=>route.mode==='rail'))registerRail(valley.transport,route);
+  valley.truckRuns=valley.transport.routes.map(route=>route.mode==='rail'?ContourRail.run(route,valley.transport,earthHeight):truckRun(route,valley.transport));
   valley.stationApproaches=new Map();
   const stationsByKey=new Map();
   for(const [,route] of ContourTown.roadEntries(valley.transport)){
@@ -951,6 +961,28 @@ function prepareTransport(valley){
       const reach=2.10+Math.max(...[left,right,top,bottom].map(z=>Math.abs(z-station.z)))/(40/(2*earthHeight));
       insert({station,reach},station.x-reach,station.y-reach,station.x+reach,station.y+reach);
     }
+  }
+  for(const track of Object.values(valley.transport.railTracks??{})){
+    const points=track.points,formation=track.tracks===2?.27:.125;
+    const sections=points.map((p,i)=>{
+      const a=points[Math.max(0,i-1)],b=points[Math.min(points.length-1,i+1)];
+      const length=Math.hypot(b.x-a.x,b.y-a.y)||1;
+      return model?.section(natural,{...p,dx:(b.x-a.x)/length,dy:(b.y-a.y)/length},earthHeight,formation)??{left:.8,right:.8};
+    });
+    for(let i=1;i<points.length;i++){
+      const a=points[i-1],b=points[i],s=sections[i-1],e=sections[i];
+      if(a.bridge||b.bridge||valley.wet((a.x+b.x)/2,(a.y+b.y)/2))continue;
+      const reach=Math.max(s.left,s.right,e.left,e.right)+1.25;
+      insert({a,b,s,e,reach,width:formation},Math.min(a.x,b.x)-reach-.7,Math.min(a.y,b.y)-reach-.7,
+        Math.max(a.x,b.x)+reach+.7,Math.max(a.y,b.y)+reach+.7);
+    }
+  }
+  for(const station of Object.values(valley.transport.railStations??{})){
+    stationsByKey.set(contourStationKey(station),station);
+    const halfLength=(station.platformLength??2.4)*.5,reach=halfLength+1.7;
+    const center=station.terminal?halfLength:0;
+    const pad={...station,x:station.x+station.nx*.51-station.ny*center,y:station.y+station.ny*.51+station.nx*center};
+    insert({station:pad,reach,halfLength,halfDepth:.34},pad.x-reach,pad.y-reach,pad.x+reach,pad.y+reach);
   }
   for(const station of valley.transport.extraBays??[]){
     const key=contourStationKey(station);
@@ -1034,7 +1066,7 @@ function terrainRoadContact(valley,x,y,margin=0){
       const s=item.station,dx=x-s.x,dy=y-s.y;
       if(Math.hypot(dx,dy)>item.reach+margin)continue;
       const a=Math.abs(dx*s.nx+dy*s.ny),b=Math.abs(dy*s.nx-dx*s.ny);
-      gap=Math.hypot(Math.max(0,a-.48),Math.max(0,b-.70));
+      gap=Math.hypot(Math.max(0,a-(item.halfDepth??.48)),Math.max(0,b-(item.halfLength??.70)));
       score=gap+.03;z=s.z;offset=gap;width=0;
     }else{
       const {a,b,s,e}=item,dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy)||1;
@@ -1325,8 +1357,8 @@ function blockedByTransport(valley,lot){
   for(const item of valley.transportBins.get(Math.floor(x)+','+Math.floor(y))??[]){
     if(item.station){
       const s=item.station,dx=x-s.x,dy=y-s.y;
-      if(Math.abs(dx*s.nx+dy*s.ny)<.48+lot.radius&&Math.abs(dy*s.nx-dx*s.ny)<.70+lot.radius)return true;
-    }else if(distanceToRoad(x,y,item.a,item.b)<.23+lot.radius)return true;
+      if(Math.abs(dx*s.nx+dy*s.ny)<(item.halfDepth??.48)+lot.radius&&Math.abs(dy*s.nx-dx*s.ny)<(item.halfLength??.70)+lot.radius)return true;
+    }else if(distanceToRoad(x,y,item.a,item.b)<Math.max(.23,item.width)+lot.radius)return true;
   }
   return false;
 }
@@ -1408,12 +1440,69 @@ function visibleAsset(x,y,z,padding){
   const [sx,sy]=project([x,y,z]);
   return sx>=-padding&&sy>=-padding&&sx<=width+padding&&sy<=height+padding;
 }
+function routeVehiclePose(route,run,vehicle){
+  if(route.mode==='rail')return (vehicle&&ContourRail.pose(run,vehicle))??run.path[0];
+  return truckPose(run,showcase?(vehicle?.phase??0)+trainTime*4:vehicle?.phase??trainTime);
+}
+function followVehiclePose(){
+  const route=trial.transport.routes[0],run=trial.truckRuns[0];
+  return routeVehiclePose(route,run,trial.market.fleet(route).vehicles[0]);
+}
+function railActors(route,index,run,fleet,scale,actors){
+  const staged=new Set();
+  for(const vehicle of fleet){
+    const from=vehicle.rail?.from??0;
+    const idle=!vehicle.rail?.active;
+    if(idle&&staged.has(from))continue;
+    if(idle)staged.add(from);
+    const units=[
+      ...(vehicle.consist?.locomotives??[]).map(id=>({id,part:ContourRail.locomotives[id],kind:'locomotive'})),
+      ...(vehicle.consist?.cars??[]).map(id=>({id,part:ContourRail.cars[id],kind:trial.market.isFreight(route)?'freight':'passenger'})),
+    ].filter(unit=>unit.part);
+    const unitScale=ContourRail.metresPerUnit??40;
+    const length=units.reduce((total,unit)=>total+unit.part.length/unitScale,0);
+    const lead=ContourRail.pose(run,vehicle);
+    if(!lead)continue;
+    if(!visibleAsset(lead.x,lead.y,lead.z,16+scale*(1+length)))continue;
+    const runLength=run.length;
+    const distance=(vehicle.rail?.distance??0)/unitScale;
+    const headMargin=Math.min(.045,runLength*.1);
+    const shift=clamp(distance,Math.min(length+headMargin,runLength-headMargin),runLength-headMargin)-distance;
+    let position=0;
+    for(const unit of units){
+      const unitLength=unit.part.length/unitScale;
+      const center=position+unitLength*.5;
+      const reverse=lead.direction<0;
+      const offset=(reverse?length-center:center)-shift;
+      const a=ContourRail.pose(run,vehicle,offset+unitLength*.25);
+      const b=ContourRail.pose(run,vehicle,offset-unitLength*.25);
+      const dx=b.x-a.x,dy=b.y-a.y,dz=b.z-a.z;
+      const yaw=Math.atan2(dy,dx)+(reverse?Math.PI:0),pitch=Math.atan2(reverse?-dz:dz,Math.hypot(dx,dy));
+      const pose={x:(a.x+b.x)/2,y:(a.y+b.y)/2,z:(a.z+b.z)/2+.048};
+      const model=ContourRailAssets.vehicle(unit.id,unitLength,unit.kind);
+      actors.push(modelActor(model,pose.x,pose.y,pose.z,yaw,[1,1,1],pitch));
+      if(unit.kind==='freight'&&vehicle.load>0&&scale>=16&&!/box|van|goods|heavy/i.test(unit.id)){
+        const cargo=trial.market.routeTrade(route)?.cargo;
+        const load=freightLoadModel(cargo),k=unitLength*.21;
+        actors.push(modelActor(load,pose.x,pose.y,pose.z+.062,yaw,[k,k,k],pitch));
+      }
+      if(scale>=12){
+        const [x,y]=project([pose.x,pose.y,pose.z+.055]);
+        vehicleHits.push({x,y,radius:Math.max(8,scale*.085),index,vehicle});
+      }
+      position+=unitLength;
+    }
+  }
+}
 function routeActors(scale,actors){
   const detailed=scale>=19;
   for(const [index,run] of trial.truckRuns.entries()){
-    const route=trial.transport.routes[index],freight=trial.market.isFreight(route);
+    const route=trial.transport.routes[index];
+    const fleet=trial.market.fleet(route).vehicles;
+    if(route.mode==='rail'){railActors(route,index,run,fleet,scale,actors);continue;}
+    const freight=trial.market.isFreight(route);
     const cargo=trial.market.routeTrade(route)?.cargo;
-    const fleet=trial.market.fleet(route).vehicles,rig=(freight||showcase&&index%2===0)?gameAssets.truck:gameAssets.bus;
+    const rig=(freight||showcase&&index%2===0)?gameAssets.truck:gameAssets.bus;
     for(const vehicle of fleet){
       if(trial.market.staged(index,vehicle)){
         const station=route.stations[vehicle.phase===0?0:1];
@@ -1608,6 +1697,45 @@ function builtStation(s,apron=false,includeAccess=true){
   if(access.length)cityRoad({nodes:access,bridge:false,loop:false});
 }
 
+function railPlatform(station){
+  const tracks=Object.values(trial.transport.railTracks??{}).filter(t=>t.from===station.id||t.to===station.id);
+  const closest=tracks.find(t=>t.tracks===2)??tracks[0];
+  const double=closest?.tracks===2;
+  const tx=-station.ny,ty=station.nx;
+  const angle=Math.atan2(ty,tx);
+  const halfLength=(station.platformLength??2.4)*.5;
+  const center=station.terminal?halfLength:0;
+  const outside=double?.215:.083,depth=.43;
+  const outline=(start,end,near,far)=>[[start,near],[end,near],[end,far],[start,far]].map(([along,side])=>[
+    station.x+tx*(along+center)+station.nx*side,station.y+ty*(along+center)+station.ny*side
+  ]);
+  solid(outline(-halfLength,halfLength,outside,outside+depth),station.z-.045,.133,'#aa9d87',{cap:'#c2b297'});
+  solid(outline(-halfLength,halfLength,outside+.022,outside+.042),station.z+.087,.006,'#e3cf9a');
+  if(double){
+    solid(outline(-halfLength,halfLength,-outside-.23,-outside),station.z-.045,.133,'#a99b84',{cap:'#bcae94'});
+    solid(outline(-halfLength,halfLength,-outside-.042,-outside-.022),station.z+.087,.006,'#e3cf9a');
+  }
+  for(const offset of [-halfLength+.10,halfLength-.10]){
+    const p=outline(offset-.015,offset+.015,outside+.10,outside+.39);
+    solid(p,station.z+.088,.006,'#a09176');
+  }
+  const model=contourBiomeModel('westernBuilding','Rail depot');
+  const k=Math.min(.17,.85/model.width);
+  const depotSide=outside+depth*.78;
+  layers.push(...actorFaces(modelActor(model.mesh,station.x+tx*center+station.nx*depotSide,
+    station.y+ty*center+station.ny*depotSide,station.z+.089,angle,[k,k,k])));
+  if(station.terminal&&closest){
+    const from=closest.from===station.id,p=closest.points[from?1:closest.points.length-2];
+    const yaw=Math.atan2(p.y-station.y,p.x-station.x);
+    layers.push(...actorFaces(modelActor(ContourRailAssets.buffers(double?2:1),station.x,station.y,station.z,yaw,[1,1,1])));
+  }
+}
+
+function railPlatformMarker(station){
+  const center=station.terminal?(station.platformLength??2.4)*.5:0;
+  return {x:station.x+station.nx*.39-station.ny*center,y:station.y+station.ny*.39+station.nx*center,z:station.z+.090,
+    angle:Math.atan2(station.nx,-station.ny),station,mode:'rail',name:station.name+' rail station'};
+}
 function stationEditorFaces(station,apron){
   const sceneLayers=layers;
   layers=[];
@@ -1615,11 +1743,27 @@ function stationEditorFaces(station,apron){
   finally{layers=sceneLayers;}
 }
 
-function buildTransport(route,roads,lots){
+function registerRail(transport,route,replace=false){
+  const tracks=transport.railTracks??={},stations=transport.railStations??={};
+  for(const track of route.trackPaths??[]){
+    if(!tracks[track.id])tracks[track.id]=track;
+    else if(replace)Object.assign(tracks[track.id],track);
+  }
+  delete route.trackPaths;
+  route.stations=route.stations.map(station=>{
+    if(!stations[station.id])stations[station.id]={...station,mode:'rail'};
+    else if(replace)Object.assign(stations[station.id],station,{mode:'rail'});
+    return stations[station.id];
+  });
+}
+
+function buildTransport(route,roads=[],lots=route.removedLots??[]){
+  if(route.capital>trial.market.state.cash)return false;
+  if(route.mode==='rail')registerRail(trial.transport,route,true);
   const {stationLayouts,...service}=route;
   if(stationLayouts&&Object.keys(stationLayouts).length)Object.assign(trial.transport.stationLayouts??={},stationLayouts);
   route=service;
-  if(trial.transport.roadArchive)route.roadId=(ContourTown.roadEntries(trial.transport).at(-1)?.[0]??-1)+1;
+  if(route.mode!=='rail'&&trial.transport.roadArchive)route.roadId=(ContourTown.roadEntries(trial.transport).at(-1)?.[0]??-1)+1;
   trial.market.book('capital',route.capital);trial.transport.routes.push(route);trial.market.connect(route);
   if(route.extraBays?.length)(trial.transport.extraBays??=[]).push(...route.extraBays);
   trial.transport.removedRoads=[...new Set([...trial.transport.removedRoads,...roads])];
@@ -1632,7 +1776,9 @@ function buildTransport(route,roads,lots){
   catch{$('seedStatus').textContent='Route built. Browser storage is unavailable.';}
   chooseFocus('region');
   rebuildTrial();
+  updateMapPlaces();
   requestFrame();
+  return true;
 }
 
 function cityRoad(road){
@@ -1737,7 +1883,7 @@ function buildTrialLandscape(){
   box(0,0,trialBounds.east-trialBounds.west,trialBounds.south-trialBounds.north,-.64,.64,s.soil,{cap:s.grass});
   const base=layers;layers=[];
   let formedTerrain=null;
-  if(trial.region||trial.transport.routes.length||trial.transport.roadArchive)formedTerrain=transportTerrainMesh();
+  if(trial.region||trial.transport.routes.length||trial.transport.roadArchive||Object.keys(trial.transport.railTracks??{}).length)formedTerrain=transportTerrainMesh();
   else terrainPatch(Math.floor(trialBounds.west/trialGrid),Math.ceil(trialBounds.east/trialGrid)-1,
     Math.floor(trialBounds.north/trialGrid),Math.ceil(trialBounds.south/trialGrid)-1,trialGrid,
     (x,y)=>({z:trial.ground(x,y),kind:'grass'}),trialBounds);
@@ -1878,8 +2024,10 @@ function rebuildTrial(){
     const freight=trial.market?.isFreight(route);
     for(const station of route.stations){
       const key=ContourTown.stationKey(station),angle=Math.atan2(station.ny,station.nx);
-      const platform=trial.platforms.get(key)??{x:station.x-station.ny*.52,y:station.y+station.nx*.52,z:station.z+.065,angle,
-        station,name:station.name+(station.millBay?' loading bay':' station')};
+      const platform=trial.platforms.get(key)??(route.mode==='rail'?railPlatformMarker(station):{
+        x:station.x-station.ny*.52,y:station.y+station.nx*.52,z:station.z+.065,angle,
+        station,name:station.name+(station.millBay?' loading bay':' station')
+      });
       platform[freight?'freight':'passengers']=true;
       if(freight){
         platform.cargos??=new Set();
@@ -1890,8 +2038,9 @@ function rebuildTrial(){
   }
   for(const station of trial.builtStations){
     const key=ContourTown.stationKey(station);
-    if(!trial.platforms.has(key))trial.platforms.set(key,{x:station.x,y:station.y,z:station.z+.065,station,
-      name:station.name+' station',angle:Math.atan2(station.ny,station.nx)});
+    if(!trial.platforms.has(key))trial.platforms.set(key,station.mode==='rail'?railPlatformMarker(station):{
+      x:station.x,y:station.y,z:station.z+.065,station,name:station.name+' station',angle:Math.atan2(station.ny,station.nx)
+    });
   }
   trial.bayMarkers=trial.builtStations.flatMap(station=>{
     const layout=trial.transport.stationLayouts?.[contourStationKey(station)];
@@ -1923,7 +2072,12 @@ function rebuildTrial(){
     cityRoad({nodes:road,bridge:road.some(p=>p.bridge||p.water),loop:false});
     riverRetainingWalls(road);
   }
+  for(const track of Object.values(trial.transport.railTracks??{})){
+    const flags=ContourRail.turnoutFlags(track,trial.transport);
+    layers.push(...ContourRailAssets.trackMesh(track,(x,y)=>trial.wet(x,y),flags));
+  }
   for(const base of trial.builtStations){
+    if(base.mode==='rail'){railPlatform(base);continue;}
     const layout=trial.transport.stationLayouts?.[contourStationKey(base)];
     const moved=(layout?.bays??[]).filter(bay=>bay.x!==base.x||bay.y!==base.y);
     builtStation(base,moved.some(bay=>bay.id==='1'));
@@ -2089,6 +2243,7 @@ function closeEarthworkSample(){
 }
 function updateTrialButtons(){
   for(const button of $('assets').querySelectorAll('button')){
+    if(button.dataset.focus==='trucks')button.textContent=trial?.transport.routes[0]?.mode==='rail'?'Follow train':'Follow vehicle';
     button.hidden=button.dataset.focus==='trucks'? !trial?.transport.routes.length :
       Boolean(trial)&&!['region','millbank','alderbrook','eastmere'].includes(button.dataset.focus);
   }
@@ -2643,7 +2798,7 @@ function trainCamera(){
 function sceneTarget(){
   if(focus==='train')return trainCamera();
   if(trial&&focus==='trucks'){
-    const pose=truckPose(trial.truckRuns[0],trainTime);
+    const pose=followVehiclePose();
     return [pose.x,pose.y,pose.z+.17];
   }
   if(showcase&&trial){
@@ -2651,12 +2806,12 @@ function sceneTarget(){
   }
   return trial?focusTrial(focus):keypoints[focus];
 }
-const routeHits=[],platformHits=[],homeServiceHits=[];
+const routeHits=[],platformHits=[],homeServiceHits=[],vehicleHits=[];
 let ambientFrame=0;
 function draw(now){
   frame=0;
   if(showcase&&prevTime&&!document.hidden&&!reducedMotion.matches)trainTime+=Math.min(.1,(now-prevTime)/1000);
-  if(!showcase&&playing&&prevTime&&!document.hidden&&$('roadBuilder').hidden&&!$('townEditor').open){const dt=Math.min(.5,(now-prevTime)/1000);trainTime+=dt;if(trial?.truckRuns.length||trial?.market.localRoutes.length)trial.market.step(dt*speed);}
+  if(!showcase&&playing&&prevTime&&!document.hidden&&$('roadBuilder').hidden&&$('railBuilder')?.hidden!==false&&!$('townEditor').open){const dt=Math.min(.5,(now-prevTime)/1000);trainTime+=dt;if(trial?.truckRuns.length||trial?.market.localRoutes.length)trial.market.step(dt*speed);}
   prevTime=now;
   const a=Math.cos(camera.yaw),b=Math.sin(camera.yaw),k=Math.sin(camera.pitch),l=Math.cos(camera.pitch);
   const scale=showcase&&trial?Math.max(width/58,height/24):baseScale()*camera.zoom;
@@ -2668,6 +2823,7 @@ function draw(now){
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,width,height);
   const moving=trial?[]:train(carX()),actors=[];
+  vehicleHits.length=0;
   const animateScenery=!reducedMotion.matches&&scale>=6;
   if(trial){
     riverActivity(animateScenery?trainTime:1.4,scale,animateScenery,moving,actors);
@@ -2729,8 +2885,8 @@ function draw(now){
       const caption=p.busStop?'⌂ '+waiting.length:[
         p.passengers?'⇄ '+(waiting.length-local)+'  ⌂ '+local:'',
         p.freight?'▰ '+stock:''
-      ].filter(Boolean).join('  ')||'Station';
-      const badge=label(caption,[p.x,p.y,p.z+.18],11,'#233e38','#e6f3dd',true);
+      ].filter(Boolean).join('  ')||(p.mode==='rail'?(p.station.terminal?'Terminal':'Through station'):'Station');
+      const badge=label(p.mode==='rail'?'▥ '+caption:caption,[p.x,p.y,p.z+.18],11,'#233e38','#e6f3dd',true);
       platformHits.push({key,platform:p,...badge});
     }
     if(networkUI.labels&&scale>=24)for(const {key,platform,bay,station} of trial.bayMarkers??[]){
@@ -2758,8 +2914,8 @@ function draw(now){
     if(networkUI.overlay.startsWith('service:'))drawHomeService(networkUI.overlay.split(':')[1],scale);
   }
   if(trial&&focus==='trucks'){
-    const pose=truckPose(trial.truckRuns[0],trainTime);
-    if(pose.service!==null)label(pose.inbound?'Unloading':'Loading',[pose.x,pose.y,pose.z+.29],-7);
+    const pose=followVehiclePose();
+    if(pose.service!=null)label(pose.inbound?'Unloading':'Loading',[pose.x,pose.y,pose.z+.29],-7);
   }else if(!trial&&focus==='region'){
     label('Millbank',[3.2,-2.16,.38],-10);
     for(const town of towns)label(town.name,[town.x,town.y-.9,.55],-12);
@@ -2771,12 +2927,12 @@ function draw(now){
   }
   if(showcase&&!document.hidden&&!reducedMotion.matches){
     ambientFrame=setTimeout(()=>{ambientFrame=0;requestFrame();},1000/24);
-  }else if(!showcase&&playing&&!document.hidden&&$('roadBuilder').hidden&&!$('townEditor').open){
+  }else if(!showcase&&playing&&!document.hidden&&$('roadBuilder').hidden&&$('railBuilder')?.hidden!==false&&!$('townEditor').open){
     if(!trial||trial.truckRuns.length||trial.market.localRoutes.length)requestFrame();
     else if(animateScenery&&!ambientFrame){
       ambientFrame=setTimeout(()=>{
         ambientFrame=0;
-        if(playing&&!document.hidden&&$('roadBuilder').hidden&&!$('townEditor').open)requestFrame();
+        if(playing&&!document.hidden&&$('roadBuilder').hidden&&$('railBuilder')?.hidden!==false&&!$('townEditor').open)requestFrame();
       },1000/24);
     }
   }
@@ -2825,11 +2981,11 @@ function updateCaption(){
       return;
     }
     const city=trial.towns.find(t=>t.id===focus);
-    $('look').textContent=city?city.name:focus==='trucks'?'Route truck':trial.region?'Three Biomes':'Growth trial';
+    $('look').textContent=city?city.name:focus==='trucks'?(trial.transport.routes[0].mode==='rail'?'Route train':'Route vehicle'):trial.region?'Three Biomes':'Growth trial';
     const count=city?.lots.filter(l=>city.built.has(l.id)&&!trial.transport.removedLots.includes(city.id+':'+l.id)&&!blockedByTransport(trial,l)).length;
     const routes=trial.transport.routes.length;
     $('description').textContent=focus==='trucks'?trial.transport.routes[0].stations.map((s,i)=>s.name??['Origin','Destination'][i]).join(' ↔ '):city?city.pattern+' · '+count+' buildings':
-      'Seed '+trial.seed+' · 2.5 m terraces · '+routes+' '+(routes===1?'road route':'road routes');
+      'Seed '+trial.seed+' · 2.5 m terraces · '+routes+' '+(routes===1?'route':'routes');
     return;
   }
   $('look').textContent=focus==='cut'?'Hill road':focus==='railHill'?'Rail hill':style.name;
@@ -2978,6 +3134,8 @@ mapSurface.addEventListener('pointerup',e=>{
     }
     const platform=[...platformHits].reverse().find(p=>Math.abs(point[0]-p.x)<=p.w/2+5&&Math.abs(point[1]-p.y)<=13);
     if(platform){mapTap=null;if(platform.bayId)editStation(platform.station,platform.bayId);else networkUI.inspectStop(platform.key,platform.platform);return;}
+    const vehicle=[...vehicleHits].reverse().find(hit=>gap(point,[hit.x,hit.y])<hit.radius);
+    if(vehicle){mapTap=null;networkUI.inspectVehicle?.(vehicle.index,vehicle.vehicle);return;}
     const routes=networkUI.overlay==='routes'?ContourRouteOverlay.pick(routeHits,point):[];
     if(routes.length)networkUI.inspectRoutes(routes);
     else{
@@ -3009,7 +3167,12 @@ $('effect').onchange=e=>{
 };
 const routeBuilder=window.createRoadBuilder?.({
   getValley:()=>trial,bounds:trialBounds,heightScale:earthHeight,draftKey,stationFaces:stationEditorFaces,
-  begin:()=>setGrowthSpeed(0),commit:buildTransport,upgradeStation:applyStationUpgrade,finish:()=>{prevTime=0;requestFrame();}
+  begin:()=>setGrowthSpeed(0),commit:buildTransport,upgradeStation:applyStationUpgrade,finish:()=>{prevTime=0;updateRouteDraftButton();requestFrame();}
+});
+const railBuilder=window.createRailBuilder?.({
+  getValley:()=>trial,bounds:trialBounds,heightScale:earthHeight,draftKey,
+  begin:()=>setGrowthSpeed(0),finish:()=>{prevTime=0;updateRouteDraftButton();requestFrame();},commit:buildTransport,
+  updateRailRoute,updateRailStation,designSection:routeBuilder.designRailSection
 });
 const optionsPanel=$('optionsPanel');
 function setOptions(open,restoreFocus=false){
@@ -3226,14 +3389,15 @@ function drawRouteOverlay(){
   if(!networkUI.labels)return;
   for(const hit of routeHits){
     const r=routes[hit.index],run=trial.truckRuns[hit.index];
-    const color=ribbon.color(hit.index),capacity=m.capacity(r);
+    const color=ribbon.color(hit.index);
     const seen=[];
     for(const v of m.fleet(r).vehicles){
-      if(r.local?localStaged(v):m.staged(hit.index,v))continue;
-      const pose=r.local?localPose(r,v):truckPose(run,v.phase);
+      if(r.local?localStaged(v):r.mode==='rail'?!v.rail?.active:m.staged(hit.index,v))continue;
+      const pose=r.local?localPose(r,v):routeVehiclePose(r,run,v);
       const point=[pose.x,pose.y,pose.z+.30],q=project(point);
       const offset=seen.filter(p=>gap(p,q)<32).length;
       seen.push(q);
+      const capacity=m.capacity(r,v);
       const waitLabel={storage:'Full',filling:'Loading',orders:'Orders',bay:'Q',traffic:'Q'}[v.waiting];
       const badge=label((hit.index+1)+' · '+v.load+'/'+capacity+(waitLabel?' · '+waitLabel:''),point,-12-offset*20,'#26312d',color);
       hit.badges.push(badge);
@@ -3247,7 +3411,7 @@ function drawDeliveryReceipts(){
     for(const v of m.fleet(r).vehicles){
       const receipt=m.receipts.get(v);
       if(!receipt)continue;
-      const p=truckPose(trial.truckRuns[index],v.phase);
+      const p=routeVehiclePose(r,trial.truckRuns[index],v);
       ctx.save();
       ctx.globalAlpha=Math.min(1,(3-receipt.age)*2);
       label('+'+receipt.pay.toLocaleString('en-GB')+' cr',[p.x,p.y,p.z+.5],-24-receipt.age*11,'#234d3a','#e0f6d2');
@@ -3268,6 +3432,7 @@ function restartValley(){
     saveNetwork();
     localStorage.removeItem(saveKey(old));
     localStorage.removeItem(draftKey(old));
+    localStorage.removeItem(draftKey(old)+':rail');
     $('newRoute').textContent='New route';
     speed=1;
     if(!playing)$('pause').click();
@@ -3363,6 +3528,74 @@ function applyStationUpgrade({key,layout,assignments,accesses,removedBays,lots,c
   trialLandscape=null;rebuildTrial();saveNetwork();updateMapPlaces();requestFrame();
   return true;
 }
+function refreshRailway(){
+  prepareTransport(trial);
+  trialLandscape=null;
+  rebuildTrial();saveNetwork();updateTrialButtons();updateCaption();updateMapPlaces();networkUI.render();requestFrame();
+}
+function updateRailRoute(index,changes){
+  const transport=trial.transport,route=transport.routes[index];
+  if(route?.mode!=='rail')return false;
+  const {capital=0,removedLots=[],...plan}=changes;
+  if(capital>trial.market.state.cash)return false;
+  if((route.cargo==='passengers')!==(plan.cargo==='passengers')&&trial.market.fleet(route).vehicles.length){
+    return 'Retire trains before switching between passenger and freight service.';
+  }
+  const sameService=route.cargo===plan.cargo&&route.cargoFrom===plan.cargoFrom&&
+    route.stations.every((station,i)=>station.id===plan.stations[i].id)&&
+    route.trackIds?.length===plan.trackIds?.length&&route.trackIds?.every((id,i)=>id===plan.trackIds[i]&&
+      route.trackDirections?.[i]===plan.trackDirections?.[i])&&route.points.length===plan.points.length&&
+    route.points.every((point,i)=>point.x===plan.points[i].x&&point.y===plan.points[i].y&&point.z===plan.points[i].z);
+  const running=other=>trial.market.fleet(other).vehicles.some(v=>v.rail?.active);
+  if(!sameService&&running(route))return 'Wait for the assigned trains to finish their trips before rerouting.';
+  for(const track of plan.trackPaths??[]){
+    const built=transport.railTracks?.[track.id];
+    if(!built||built.points===track.points)continue;
+    const shared=transport.routes.some(other=>other!==route&&other.mode==='rail'&&other.trackIds.includes(track.id));
+    if(shared&&(built.points.length!==track.points.length||built.points.some((point,i)=>{
+      const next=track.points[i];
+      return point.x!==next.x||point.y!==next.y||point.z!==next.z;
+    })))return 'This section also carries another route. Keep its alignment or build a separate section.';
+  }
+  const upgraded=new Set((plan.trackPaths??[]).filter(track=>{
+    const before=transport.railTracks?.[track.id];
+    return before&&before.tracks!==track.tracks;
+  }).map(track=>track.id));
+  if(upgraded.size&&transport.routes.some(other=>other.mode==='rail'&&other.trackIds?.some(id=>upgraded.has(id))&&running(other))){
+    return 'Wait for trains using this section to finish their trips before adding a track.';
+  }
+  if(!sameService){
+    trial.market.releaseRouteLoads(route,index);
+    for(const vehicle of trial.market.fleet(route).vehicles){
+      delete vehicle.rail;
+      Object.assign(vehicle,{phase:0,ready:true,load:0,waiting:null,passengers:[]});
+    }
+  }
+  Object.assign(route,plan,{capital:(route.capital??0)+capital});
+  registerRail(transport,route,true);
+  trial.market.book('capital',capital);
+  trial.market.connect(route);
+  transport.removedLots=[...new Set([...transport.removedLots,...removedLots])];
+  refreshRailway();
+  return true;
+}
+function updateRailStation(station){
+  if(!trial.transport.railStations?.[station.id])return false;
+  Object.assign(trial.transport.railStations[station.id],station,{mode:'rail'});
+  refreshRailway();
+  return true;
+}
+function deleteRailStation(station){
+  const transport=trial.transport;
+  const incident=new Set(Object.values(transport.railTracks??{}).filter(track=>
+    track.from===station.id||track.to===station.id).map(track=>track.id));
+  if(transport.routes.some(route=>route.mode==='rail'&&(route.stations.some(stop=>stop.id===station.id)||
+    route.trackIds?.some(id=>incident.has(id)))))return false;
+  if(!transport.railStations?.[station.id])return false;
+  delete trial.transport.railStations[station.id];
+  refreshRailway();
+  return true;
+}
 function stationDepot(station){
   if(!trial.region)return null;
   const hubKey=ContourTown.stationKey(station);
@@ -3384,6 +3617,7 @@ function stationDepot(station){
   return site;
 }
 function editStation(station,bayId){
+  if(station.mode==='rail')return railBuilder?.openStation(station);
   const source=trial.market.source(station);
   if(source?.depot&&source.hubKey){
     const original=trial.builtStations.find(s=>ContourTown.stationKey(s)===source.hubKey&&s.place===source.host);
@@ -3396,11 +3630,13 @@ function switchRegion(){
   const region=trial.region?'classic':'mixed';
   const seed=Number(localStorage.getItem(seedKey(region))??1615);
   if(!applyTrial(seed,undefined,region))return false;
-  $('newRoute').textContent=localStorage.getItem(draftKey(trial))?'Resume route':'New route';
+  updateRouteDraftButton();
   updateMapPlaces();
   return true;
 }
-const networkUI=createNetworkUI({switchRegion,stationDepot,editStation,getValley:()=>trial,focus:chooseFocus,redraw:requestFrame,zoom,pause:()=>$('pause').click(),resumeState:()=>playing,save:saveNetwork,restart:restartValley,getSpeed:()=>speed,setSpeed:value=>{speed=value;},buildRoute:()=>routeBuilder?.open(),editTown:(mode,id,loop)=>townEditor.open(mode,id,loop),deleteLoop:deleteTownLoop,deleteRoute:deleteRoadRoute});
+const networkUI=createNetworkUI({switchRegion,stationDepot,editStation,getValley:()=>trial,focus:chooseFocus,redraw:requestFrame,zoom,pause:()=>$('pause').click(),resumeState:()=>playing,save:saveNetwork,restart:restartValley,getSpeed:()=>speed,setSpeed:value=>{speed=value;},buildRoute:(mode='road')=>mode==='rail'?railBuilder?.open():routeBuilder?.open(),
+  editRailRoute:route=>railBuilder?.openRoute(route,trial.transport.routes.indexOf(route)),
+  editRailStation:station=>railBuilder?.openStation(station),deleteRailStation,editTown:(mode,id,loop)=>townEditor.open(mode,id,loop),deleteLoop:deleteTownLoop,deleteRoute:deleteRoadRoute});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)saveNetwork();});
 window.addEventListener('pagehide',saveNetwork);
 setInterval(()=>{
@@ -3408,7 +3644,7 @@ setInterval(()=>{
   saveNetwork();networkUI.tick();updateMapPlaces();
 },1500);
 setInterval(()=>{
-  if(showcase||!trial?.market||document.hidden||!playing||!$('roadBuilder').hidden||$('townEditor').open)return;
+  if(showcase||!trial?.market||document.hidden||!playing||!$('roadBuilder').hidden||$('railBuilder')?.hidden===false||$('townEditor').open)return;
   if(!trial.truckRuns.length&&!trial.market.localRoutes.length)trial.market.step(.25*speed);
   networkUI.clock();
 },250);
@@ -3454,7 +3690,7 @@ function enterGame(seed,region,difficulty){
     return;
   }
   $('startScreen').hidden=true;$('app').inert=false;
-  try{if(localStorage.getItem(draftKey(trial)))$('newRoute').textContent='Resume route';}catch{}
+  updateRouteDraftButton();
   saveNetwork();updateMapPlaces();networkUI.render();
   $('newRoute').focus({preventScroll:true});
 }

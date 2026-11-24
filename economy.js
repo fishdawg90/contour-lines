@@ -1,5 +1,5 @@
 // Quantities are whole loads or passengers. Coordinates are 40 metres per map unit.
-window.contourStationKey=station=>[station.x,station.y,station.z].join(':');
+window.contourStationKey=station=>station.mode==='rail'&&station.id?'rail:'+station.id:[station.x,station.y,station.z].join(':');
 window.ContourEconomy = function(valley) {
   const data=valley.transport;
   const startingCash={relaxed:3000000,standard:2000000,hard:1250000};
@@ -8,6 +8,34 @@ window.ContourEconomy = function(valley) {
   const millUpgradeDemand=60;
   const runningCostMultiplier=1.5;
   const truckCapacity=4, busCapacity=8, startupWeeks=1;
+  const rail=window.ContourRail,isRail=route=>route.mode==='rail';
+  const equipmentQuotes=new WeakMap();
+  function railCargo(route){return routeTrade(route)?.cargo??route.cargo??'passengers';}
+  function railQuote(route,vehicle){
+    const cargo=railCargo(route);
+    if(!vehicle)return rail.quote(rail.defaultConsist(cargo),cargo);
+    vehicle.consist??=rail.defaultConsist(cargo);
+    const cached=equipmentQuotes.get(vehicle.consist);
+    if(cached?.cargo===cargo)return cached.quote;
+    const quote=rail.quote(vehicle.consist,cargo);
+    equipmentQuotes.set(vehicle.consist,{cargo,quote});
+    return quote;
+  }
+  function railRunningCost(consist){
+    return (62+consist.locomotives.length*31+consist.cars.length*8)*runningCostMultiplier;
+  }
+  function fitsPlatforms(route,quote){
+    return route.stations.every(station=>quote.length<=(station.platformLength??2.4)*rail.metresPerUnit+1e-6);
+  }
+  function railState(vehicle){
+    return vehicle.rail??={from:0,distance:0,speed:0,dwell:0,active:false};
+  }
+  function vehicleSide(route,vehicle,run){
+    return isRail(route)?railState(vehicle).from:vehicle.phase>=run.travel+bayTime?1:0;
+  }
+  function vehicleCapacity(route,vehicle){
+    return isRail(route)?railQuote(route,vehicle).capacity:isFreight(route)?truckCapacity:busCapacity;
+  }
   const previous=state.version!==2;
   if(previous){
     Object.assign(state,{version:2,week:0,weekTime:0,stock:0,timber:{},connections:{},orders:{},
@@ -47,12 +75,12 @@ window.ContourEconomy = function(valley) {
   const routeTrades=new WeakMap();
   function routeTrade(route){
     if(route.local)return null;
-    if(!routeTrades.has(route)){
-      const [a,b]=route.stations.map(source);
-      const plan=trade(a,b,route.cargo,route.cargoFrom);
-      routeTrades.set(route,plan??(valley.region&&ContourRegion.trade(a,b,route.cargo,route.cargoFrom,{allowFormerDemand:true})));
-    }
-    return routeTrades.get(route);
+    const cached=routeTrades.get(route);
+    if(cached&&cached.stations===route.stations&&cached.cargo===route.cargo&&cached.from===route.cargoFrom)return cached.plan;
+    const [a,b]=route.stations.map(source);
+    const plan=trade(a,b,route.cargo,route.cargoFrom)??(valley.region&&ContourRegion.trade(a,b,route.cargo,route.cargoFrom,{allowFormerDemand:true}));
+    routeTrades.set(route,{stations:route.stations,cargo:route.cargo,from:route.cargoFrom,plan});
+    return plan;
   }
   const formerDemand=plan=>Boolean(plan&&plan.cargo!=='passengers'&&!isIndustry(plan.to)&&
     !ContourRegion.acceptsTownCargo(plan.to,plan.cargo));
@@ -519,13 +547,14 @@ window.ContourEconomy = function(valley) {
     const needed=Math.max(0,directTarget-market.stock)+Math.max(0,yardTarget-(yard?.timber??0));
     return Math.max(0,needed-market.inbound);
   }
-  function timberLoading(route,from,run,load=0){
+  function timberLoading(route,from,run,load=0,batch=capacity(route)){
     const station=route.stations[1-from],town=source(station);
-    const order=timberForRoute(town,station,run.travel);
-    const remaining=truckCapacity-load;
+    const demand=timberForRoute(town,station,run.travel);
+    const remaining=batch-load;
     const market=timberMarket(town);
     const room=timberBuffer(town)-market.stock-market.inbound;
-    // An open order may be rounded up to a whole truck if the town can store it.
+    const order=isRail(route)?Math.min(demand,Math.max(0,room)):demand;
+    // An open order may be rounded up to a whole vehicle if the town can store it.
     const canFill=order>=remaining||((order>0||load>0)&&room>=remaining);
     return {order,remaining,canFill};
   }
@@ -557,7 +586,11 @@ window.ContourEconomy = function(valley) {
   function isActive(a,b){
     return Boolean(a&&b&&state.connections[pair(a,b)]!==undefined&&state.connections[pair(a,b)]<=state.week);
   }
-  function capacity(route){return isFreight(route)?truckCapacity:busCapacity;}
+  function capacity(route){
+    if(!isRail(route))return vehicleCapacity(route);
+    const vehicles=fleet(route).vehicles.filter(v=>!v.retiring);
+    return vehicles.length?Math.max(...vehicles.map(v=>vehicleCapacity(route,v))):vehicleCapacity(route);
+  }
   function book(kind,amount){
     state.finance.current[kind]+=amount;
     state.cash+=kind==='revenue'?amount:-amount;
@@ -735,10 +768,10 @@ window.ContourEconomy = function(valley) {
       }
       const from=route.stations.indexOf(station)===0?1:0,run=valley.truckRuns[index];
       const {order,canFill}=timberLoading(route,from,run);
-      const waitingLoad=fleet(route).vehicles.find(v=>!v.retiring&&v.ready&&v.load>0&&
-        (v.phase>=run.travel+bayTime?1:0)===from)?.load??0;
-      const canFinish=waitingLoad&&timberLoading(route,from,run,waitingLoad).canFill;
-      const batch=canFinish?truckCapacity-waitingLoad:canFill?truckCapacity:0;
+      const waiting=fleet(route).vehicles.find(v=>!v.retiring&&v.ready&&v.load>0&&vehicleSide(route,v,run)===from);
+      const waitingLoad=waiting?.load??0,batchCapacity=waiting?vehicleCapacity(route,waiting):capacity(route);
+      const canFinish=waitingLoad&&timberLoading(route,from,run,waitingLoad,batchCapacity).canFill;
+      const batch=canFinish?batchCapacity-waitingLoad:canFill?batchCapacity:0;
       const demand=route.fillWait?Math.max(order,batch):order;
       orders.set(city.id,Math.max(demand,orders.get(city.id)??0));
     }
@@ -830,6 +863,10 @@ window.ContourEconomy = function(valley) {
   function fleet(r){
     const service=r.service??={vehicles:[{phase:0,load:0,ready:true}],revenue:0,expenses:0,delivered:0,km:0};
     service.thisMonth??={revenue:0,expenses:0,delivered:0,km:0};
+    if(isRail(r))for(const vehicle of service.vehicles){
+      vehicle.consist??=rail.defaultConsist(railCargo(r));
+      railState(vehicle);
+    }
     return service;
   }
   function townTotals(city){
@@ -884,13 +921,14 @@ window.ContourEconomy = function(valley) {
     const a=r.stations[from],b=r.stations[1-from],origin=source(a),dest=source(b);
     if(!isActive(origin,dest)||dest===mill)return;
     if(origin===mill)return;
-    board(v,stationKey(a),p=>!p.localDrop&&p.dest===dest.id,busCapacity,true);
-    passengerStop(dest).inbound+=v.load;
+    const onboard=v.load;
+    board(v,stationKey(a),p=>!p.localDrop&&p.dest===dest.id,vehicleCapacity(r,v),true);
+    passengerStop(dest).inbound+=v.load-onboard;
     if(!v.load&&!waitingAt(stationKey(b)).some(p=>!p.localDrop&&p.dest===origin.id))return 'orders';
   }
   function loadFreight(route,vehicle,from,run,dt,plan){
     const legacy=plan.cargo==='timber'&&!plan.to.depot;
-    const remaining=truckCapacity-vehicle.load;
+    const batch=vehicleCapacity(route,vehicle),remaining=batch-vehicle.load;
     const target=route.stations[1-from];
     const reachableHomes=legacy||isIndustry(plan.to)?0:catchment(target,plan.to,'delivery',plan.cargo).length;
     const request=!legacy&&freight.orders(plan.to,plan.cargo,run.travel,reachableHomes);
@@ -899,7 +937,7 @@ window.ContourEconomy = function(valley) {
       request.order=Math.max(0,request.order-staged);
       request.room=Math.max(0,request.room-staged);
     }
-    const loading=legacy?timberLoading(route,from,run,vehicle.load):{
+    const loading=legacy?timberLoading(route,from,run,vehicle.load,batch):{
       order:request.order,canFill:request.order>=remaining||(request.order>0||vehicle.load>0)&&request.room>=remaining
     };
     const stock=plan.from===mill?state.stock:freight.available(plan.from,plan.cargo);
@@ -930,7 +968,8 @@ window.ContourEconomy = function(valley) {
     if(!v.load)return;
     const city=source(r.stations[dest]),svc=fleet(r),plan=routeTrade(r),cargo=isFreight(r),timber=plan?.cargo==='timber'&&!plan.to.depot;
     const direct=distance(source(r.stations[0]),source(r.stations[1]))*.04;
-    const quality=Math.min(1,(35+direct*45)/run.travel);
+    const travel=isRail(r)?(railState(v).travelElapsed||run.travel):run.travel;
+    const quality=Math.min(1,(35+direct*45)/travel);
     const rate=timber?fare*.88:cargo?ContourRegion.goods[plan.cargo][3]:120;
     const distanceFactor=valley.region?Math.sqrt(direct)*.72+direct*.31:Math.sqrt(direct);
     const pay=city.depot?0:Math.round(v.load*rate*distanceFactor*quality);
@@ -997,7 +1036,19 @@ window.ContourEconomy = function(valley) {
   const localSpeed=route=>route.local==='delivery'?.72:.88;
   function routeThroughput(route,index){
     const account=fleet(route),actual=account.lastMonth?.delivered??null;
-    const activeVehicles=account.vehicles.filter(vehicle=>!vehicle.retiring).length;
+    const vehicles=account.vehicles.filter(vehicle=>!vehicle.retiring);
+    const activeVehicles=vehicles.length;
+    if(isRail(route)){
+      const run=valley.truckRuns[index],cargo=railCargo(route);
+      const cycles=vehicles.map(vehicle=>rail.estimate(vehicle.consist,cargo,run))
+        .filter(timed=>timed.valid&&!timed.stalled&&fitsPlatforms(route,timed));
+      const potential=cycles.reduce((total,timed)=>{
+        const cycle=timed.travel+timed.returnTravel+2*bayTime;
+        return total+4*weekSeconds*timed.capacity*(isFreight(route)?1:2)/cycle;
+      },0);
+      const lanes=run?.blocks.length&&run.blocks.every(block=>block.tracks===2)&&!run.switches.length&&!run.crossings.length?2:1;
+      return {actual,potential:potential*Math.min(1,lanes/Math.max(1,cycles.length))};
+    }
     const travel=valley.truckRuns?.[index]?.travel;
     const cycle=route.local?route.length/localSpeed(route)+(route.events?.length-1)*localDwell:
       2*(travel+bayTime);
@@ -1114,21 +1165,25 @@ window.ContourEconomy = function(valley) {
     return true;
   }
   function drive(dt){
-    const services=[];
+    const services=[],railServices=[];
     for(const [i,route] of data.routes.entries()){
       if(!isActive(...route.stations.map(source)))continue;
       const run=valley.truckRuns[i],service=fleet(route),plan=routeTrade(route);
-      if(!plan)continue;
-      const stops=route.stations.map((station,side)=>{
-        const key=window.contourStationKey(station);
-        const yard=Boolean(data.stationLayouts?.[key]);
-        const dock=yard?key+'/'+(ContourTown.stationBay(data,route,side)?.id??'1'):key;
-        const industry=isIndustry(source(station));
-        const internal=(run.extraTravel?.[side]??0)*.91/3.3;
-        return {key,dock,industry,yard,sharedBay:yard||industry,
-          reach:Math.max(yard?internal+.5:0,valley.stationApproaches?.get(key)??0)};
-      });
-      services.push({route,run,service,stops,plan});
+      if(!run||!plan)continue;
+      if(isRail(route)){
+        if(run.segments.length)railServices.push({route,run,service,plan});
+      }else{
+        const stops=route.stations.map((station,side)=>{
+          const key=window.contourStationKey(station);
+          const yard=Boolean(data.stationLayouts?.[key]);
+          const dock=yard?key+'/'+(ContourTown.stationBay(data,route,side)?.id??'1'):key;
+          const industry=isIndustry(source(station));
+          const internal=(run.extraTravel?.[side]??0)*.91/3.3;
+          return {key,dock,industry,yard,sharedBay:yard||industry,
+            reach:Math.max(yard?internal+.5:0,valley.stationApproaches?.get(key)??0)};
+        });
+        services.push({route,run,service,stops,plan});
+      }
       for(const vehicle of service.vehicles){
         const receipt=receipts.get(vehicle);
         if(receipt){receipt.age+=dt;if(receipt.age>=3)receipts.delete(vehicle);}
@@ -1160,7 +1215,113 @@ window.ContourEconomy = function(valley) {
       }
       const span=Math.min(.10,left),traffic=townTraffic(services,loops);
       for(const entry of services)advanceRoute(entry,span,locks,industryBays,traffic);
+      advanceRail(railServices,span);
       driveLocal(span,loops,traffic);
+    }
+  }
+  function canUnload(route,vehicle,destination,plan){
+    if(!isFreight(route))return true;
+    const station=route.stations[destination],town=source(station);
+    if(plan.cargo==='timber'&&!plan.to.depot){
+      const yard=timberYard(station,town);
+      const staged=yard?Math.max(0,Math.min(timberBuffer(town)-yard.timber,
+        Math.floor((yard.splitCredit??0)+vehicle.load*districtShare(station,town)))):0;
+      return vehicle.load<=timberBuffer(town)-timberMarket(town).stock+staged;
+    }
+    const {limit,stock,inbound}=freight.storage(town,plan.cargo);
+    return vehicle.load<=Math.max(limit,stock+inbound)-stock;
+  }
+  function railResources(entry,from){
+    const {route,run}=entry;
+    const blocks=rail.blockKeys(run,from);
+    const ends=route.stations.flatMap((station,side)=>{
+      const block=side?run.blocks.at(-1):run.blocks[0];
+      const key='station:'+stationKey(station);
+      // A single-track approach occupies both platform slots.
+      return block.tracks===1?[key+'/out',key+'/in']:[key+(side===from?'/out':'/in')];
+    });
+    return [...blocks,...ends];
+  }
+  function advanceRail(entries,dt){
+    const claims=new Map(),staged=[];
+    for(const entry of entries){
+      const {route,run,service,plan}=entry;
+      const cargo=railCargo(route);
+      for(const vehicle of service.vehicles.slice()){
+        const motion=railState(vehicle),quote=railQuote(route,vehicle);
+        if(!motion.active){
+          staged.push({entry,vehicle,motion,quote,cargo});
+          continue;
+        }
+        if(motion.dwell>0){
+          const next=motion.dwell+dt,destination=1-motion.from;
+          if(next>=unloadTime&&vehicle.load){
+            if(!formerDemand(plan)&&!canUnload(route,vehicle,destination,plan)){
+              vehicle.waiting='storage';
+              for(const key of railResources(entry,motion.from))claims.set(key,vehicle);
+              continue;
+            }
+            arrival(route,vehicle,destination,run);
+          }
+          if(next>=bayTime){
+            if(vehicle.retiring)removeFromFleet(service,vehicle);
+            else{
+              Object.assign(motion,{from:destination,distance:0,speed:0,dwell:0,active:false,waitAge:0});
+              vehicle.ready=true;
+              staged.push({entry,vehicle,motion,quote,cargo});
+            }
+            continue;
+          }
+          motion.dwell=next;
+        }else{
+          const previous=motion.distance;
+          motion.travelElapsed=(motion.travelElapsed??0)+dt;
+          const done=rail.advance(run,motion,quote,cargo,vehicle.load,dt);
+          const km=(motion.distance-previous)/1000;
+          const expense=km*railRunningCost(vehicle.consist);
+          bookRoute(service,'km',km);bookRoute(service,'expenses',expense);book('operating',expense);
+          if(done){
+            vehicle.unloaded=vehicle.load;
+            motion.dwell=dt;
+            motion.tracting=0;
+            motion.braking=0;
+          }
+        }
+        vehicle.waiting=motion.stallTime>1&&motion.dwell===0?'traction':null;
+        for(const key of railResources(entry,motion.from))claims.set(key,vehicle);
+      }
+    }
+    // Older requests are considered first. Reserve the complete itinerary atomically.
+    staged.sort((a,b)=>(b.motion.waitAge??0)-(a.motion.waitAge??0));
+    for(const {entry,vehicle,motion,quote,cargo} of staged){
+      const {route,run,plan,service}=entry,from=motion.from;
+      vehicle.waiting=null;
+      if(vehicle.retiring&&!vehicle.load){removeFromFleet(service,vehicle);continue;}
+      if(vehicle.hold&&!vehicle.retiring&&!vehicle.load){vehicle.waiting='held';continue;}
+      if(formerDemand(plan)&&!vehicle.load){vehicle.waiting='orders';continue;}
+      if(!fitsPlatforms(route,quote)){vehicle.waiting='platform';continue;}
+      if(!quote.valid||rail.estimate(vehicle.consist,cargo,run).stalled){vehicle.waiting='traction';continue;}
+      const keys=railResources(entry,from);
+      if(keys.some(key=>claims.has(key))){
+        vehicle.waiting='signal';
+        motion.waitAge=(motion.waitAge??0)+dt;
+        continue;
+      }
+      const freight=isFreight(route);
+      const wait=vehicle.retiring?null:freight?
+        source(route.stations[from])===plan.from?loadFreight(route,vehicle,from,run,dt,plan):null:
+        dispatchPassengers(route,vehicle,from);
+      if(wait){vehicle.waiting=wait;continue;}
+      if(freight&&!vehicle.load&&source(route.stations[from])===plan.from&&!vehicle.retiring){
+        vehicle.waiting='orders';
+        continue;
+      }
+      for(const key of keys)claims.set(key,vehicle);
+      motion.active=true;
+      motion.travelElapsed=0;
+      motion.waitAge=0;
+      vehicle.fillElapsed=0;
+      vehicle.ready=false;
     }
   }
   function advanceRoute({route,run,service,stops,plan},dt,locks,industryBays,traffic){
@@ -1168,7 +1329,7 @@ window.ContourEconomy = function(valley) {
     const half=run.travel+bayTime,length=run.path.at(-1).length;
     const gap=Math.min(truckGap,length/4);
     const lanes=[[],[]],occupied=[false,false];
-    const hauling=isFreight(route),legacy=plan.cargo==='timber'&&!plan.to.depot,paused=formerDemand(plan);
+    const hauling=isFreight(route),paused=formerDemand(plan);
     for(const v of [...service.vehicles]){
       const from=v.phase>=half?1:0,local=v.phase-from*half;
       v.waiting=null;
@@ -1179,13 +1340,7 @@ window.ContourEconomy = function(valley) {
       const destination=1-from;
       const next=local+dt;
       if(next>=run.travel+unloadTime&&v.load){
-        const town=source(route.stations[destination]);
-        const yard=legacy?timberYard(route.stations[destination],town):null;
-        const staged=yard?Math.max(0,Math.min(timberBuffer(town)-yard.timber,Math.floor((yard.splitCredit??0)+v.load*districtShare(route.stations[destination],town)))):0;
-        const storage=hauling&&!legacy?freight.storage(town,plan.cargo):null;
-        const room=legacy?timberBuffer(town)-timberMarket(town).stock+staged:storage?
-          Math.max(storage.limit,storage.stock+storage.inbound)-storage.stock:Infinity;
-        if(!paused&&v.load>room){
+        if(!paused&&!canUnload(route,v,destination,plan)){
           v.waiting='storage';
           occupied[destination]=true;
           continue;
@@ -1386,6 +1541,7 @@ window.ContourEconomy = function(valley) {
     }
   }
   function staged(index,vehicle){
+    if(isRail(data.routes[index]))return vehicle.ready&&!railState(vehicle).active&&!vehicle.load;
     const half=valley.truckRuns[index].travel+bayTime;
     return vehicle.ready&&!vehicle.industryLoading&&(vehicle.phase===0||vehicle.phase===half);
   }
@@ -1393,12 +1549,12 @@ window.ContourEconomy = function(valley) {
     const index=service.vehicles.indexOf(vehicle);
     if(index>=0)service.vehicles.splice(index,1);
   }
-  function retireVehicle(route){
+  function retireVehicle(route,selected){
     const service=fleet(route);
     const candidates=service.vehicles.filter(v=>!v.retiring);
-    const vehicle=candidates.findLast(v=>!v.load)??candidates.at(-1);
+    const vehicle=selected?candidates.find(v=>v===selected):candidates.findLast(v=>!v.load)??candidates.at(-1);
     if(!vehicle)return false;
-    if(!vehicle.load)removeFromFleet(service,vehicle);
+    if(!vehicle.load&&(!isRail(route)||!railState(vehicle).active))removeFromFleet(service,vehicle);
     else if(route.local==='delivery'&&!validLoop(route)){
       changeYardStock(route.hub,localCargo(route),vehicle.load);
       removeFromFleet(service,vehicle);
@@ -1414,12 +1570,12 @@ window.ContourEconomy = function(valley) {
   function releaseRouteLoads(route,index){
     const plan=routeTrade(route);
     if(!plan)return;
-    const half=valley.truckRuns[index].travel+bayTime;
+    const run=valley.truckRuns[index];
     for(const vehicle of fleet(route).vehicles){
       if(!vehicle.load)continue;
       const count=vehicle.load;
       if(plan.cargo==='passengers'){
-        const side=vehicle.phase>=half?1:0,origin=route.stations[side],destination=source(route.stations[1-side]);
+        const side=vehicleSide(route,vehicle,run),origin=route.stations[side],destination=source(route.stations[1-side]);
         const stop=passengerStop(destination),hub=stationKey(origin);
         stop.inbound=Math.max(0,stop.inbound-count);
         const alternative=data.routes.some(other=>other!==route&&routeTrade(other)?.cargo==='passengers'&&
@@ -1441,7 +1597,63 @@ window.ContourEconomy = function(valley) {
       }else freight.returnLoad(plan.from,plan.to,plan.cargo,count);
     }
   }
-  function purchase(r){
+  function copyConsist(consist){
+    return {locomotives:[...consist.locomotives],cars:[...consist.cars]};
+  }
+  function consistEditPrice(route,vehicle,consist){
+    if(!isRail(route))return Infinity;
+    const cargo=railCargo(route),newQuote=rail.quote(consist,cargo);
+    if(!newQuote.valid||!fitsPlatforms(route,newQuote))return Infinity;
+    const current=railQuote(route,vehicle);
+    if(!current.valid)return newQuote.price;
+    let unchanged=0;
+    for(const [group,catalog] of [['locomotives',rail.locomotives],['cars',rail.cars]]){
+      const available=[...vehicle.consist[group]];
+      for(const id of consist[group]){
+        const index=available.indexOf(id);
+        if(index<0)continue;
+        available.splice(index,1);
+        unchanged+=catalog[id].price;
+      }
+    }
+    return Math.max(0,Math.round(newQuote.price-unchanged-.75*(current.price-unchanged)));
+  }
+  function setConsist(route,vehicle,consist){
+    if(!isRail(route)||!fleet(route).vehicles.includes(vehicle)||!railStatus(route,vehicle).canEdit)return false;
+    const cost=consistEditPrice(route,vehicle,consist);
+    if(cost>state.cash)return false;
+    if(cost)book('capital',cost);
+    vehicle.consist=copyConsist(consist);
+    return true;
+  }
+  function setRailHold(route,vehicle,hold){
+    if(!isRail(route)||!fleet(route).vehicles.includes(vehicle)||vehicle.retiring)return false;
+    vehicle.hold=Boolean(hold);
+    return true;
+  }
+  function railStatus(route,vehicle){
+    if(!isRail(route))return null;
+    const motion=railState(vehicle),quote=railQuote(route,vehicle);
+    const run=valley.truckRuns[data.routes.indexOf(route)];
+    const {grade,curveRadius}=run?.segments?.length?rail.conditions(run,motion):{grade:0,curveRadius:Infinity};
+    return {speed:motion.speed*3.6,grade:grade*100,curveRadius,tracting:motion.tracting??0,braking:motion.braking??0,
+      waiting:vehicle.waiting,hold:Boolean(vehicle.hold),canEdit:!motion.active&&!vehicle.load&&!vehicle.retiring,capacity:quote.capacity,
+      mass:rail.massFor(quote,railCargo(route),vehicle.load)};
+  }
+  function purchase(r,consist){
+    if(isRail(r)){
+      const cargo=railCargo(r);
+      const selected=consist??rail.defaultConsist(cargo);
+      const quote=rail.quote(selected,cargo);
+      if(!quote.valid||!fitsPlatforms(r,quote)||state.cash<quote.price)return false;
+      book('capital',quote.price);
+      const vehicles=fleet(r).vehicles;
+      const from=vehicles.length%2;
+      const vehicle={phase:0,load:0,ready:true,consist:copyConsist(selected)};
+      railState(vehicle).from=from;
+      vehicles.push(vehicle);
+      return true;
+    }
     if(state.cash<vehiclePrice)return false;
     book('capital',vehiclePrice);
     const vehicles=fleet(r).vehicles;
@@ -1458,8 +1670,7 @@ window.ContourEconomy = function(valley) {
       for(const vehicle of fleet(route).vehicles){
         for(const id of vehicle.passengers??[])if(people[id])people[id].intercity=true;
         if(!migratePassengers||!vehicle.load)continue;
-        const half=valley.truckRuns[index].travel+bayTime;
-        const dest=source(route.stations[vehicle.phase>=half?0:1]);
+        const dest=source(route.stations[1-vehicleSide(route,vehicle,valley.truckRuns[index])]);
         if(dest)passengerStop(dest).inbound+=vehicle.load;
       }
     }
@@ -1483,6 +1694,6 @@ window.ContourEconomy = function(valley) {
     satisfaction.initialized=true;
     satisfaction.passengerOutcomes=true;
   }
-  return {state,source,trade,trades,depots,townServices,industryPulse,depotCargoLocked,setDepotCargo,routeTrade,formerDemand,isIndustry,isFreight,freight,homes,orders,townTotals,catchment,coverage,homeSatisfaction,cityServiceRate,serviceTotals,kind,fleet,routeThroughput,financeMonths,step,purchase,retireVehicle,releaseRouteLoads,vehiclePrice,radius,receipts,
+  return {state,source,trade,trades,depots,townServices,industryPulse,depotCargoLocked,setDepotCargo,routeTrade,formerDemand,isIndustry,isFreight,freight,homes,orders,townTotals,catchment,coverage,homeSatisfaction,cityServiceRate,serviceTotals,kind,fleet,routeThroughput,financeMonths,step,purchase,setConsist,setRailHold,consistEditPrice,railStatus,railRunningCost,vehicleCapacity,retireVehicle,releaseRouteLoads,vehiclePrice,radius,receipts,
     stockLimit,millUpgradeDemand,weekSeconds,weeklyDemand,townProgress,serviceWindow,serviceGraceWeeks,timberMarket,timberOpen,capacity,connect,book,productionLimit,productionEfficiency,weeklyMillOrders,timberBuffer,passengerStop,passengerBuffer,weeklyVisits,isActive,staged,localRoutes,localCatchment,localPose,validLoop,resetLocalFleet,localCargo,localCargoOptions,localStock,yardStock,waitingAt,stopKey,walkingTo:key=>Object.values(people).filter(person=>person.walk?.queue===key).length,walkers:()=>Object.values(people).filter(person=>person.walk).map(walkPosition)};
 };

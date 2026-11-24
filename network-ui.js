@@ -1,10 +1,11 @@
-window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,save,restart,stationDepot,editStation,switchRegion,getSpeed,setSpeed,buildRoute,editTown,deleteLoop,deleteRoute}){
+window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,save,restart,stationDepot,editStation,editRailRoute,editRailStation,deleteRailStation,switchRegion,getSpeed,setSpeed,buildRoute,editTown,deleteLoop,deleteRoute}){
   const el=id=>document.getElementById(id), panel=el('networkPanel'),body=el('panelBody'),footer=el('panelFooter');
   const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  let view='',overlay='routes',routeIndex=0,filter='',type='',listScroll=0,townId='';
+  let view='',overlay='routes',routeIndex=0,filter='',type='',mode='',listScroll=0,townId='';
   const cash=n=>Math.round(n).toLocaleString('en-GB')+' cr';
   const profit=period=>period.revenue-period.expenses;
   let routeChoices=[],selectedStop,selectedHome,labels=true,financeEnd=null,financeRange=0,financeView='finances',statsTown='';
+  let selectedTrain=null,railDraft=null,railFeedback='';
   const inspectors=new Set(['town','mill','detail','stop','home']);
   function node(tag,text,cls){
     const n=document.createElement(tag);n.textContent=text;if(cls)n.className=cls;return n;
@@ -48,13 +49,14 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     chip.setAttribute('aria-label',chip.title);
     return chip;
   }
-  const routeCargo=(m,r)=>r.local==='delivery'?m.localCargo(r):m.routeTrade(r)?.cargo??'passengers';
+  const routeCargo=(m,r)=>r.local==='delivery'?m.localCargo(r):m.routeTrade(r)?.cargo??r.cargo??'passengers';
   function open(next,fromHistory=false){
     if(!fromHistory){
       if(next&&!view)history.pushState({networkPanel:true},'','');
       else if(!next&&view&&history.state?.networkPanel)history.replaceState(null,'','');
     }
     if(view==='routes')listScroll=body.scrollTop;
+    if(next!=='detail'){selectedTrain=null;railDraft=null;railFeedback='';}
     view=next;render();redraw();if(next==='routes')body.scrollTop=listScroll;else body.scrollTop=0;
   }
   function sites(valley){
@@ -65,7 +67,10 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     if(center)focus(id);
     open(getValley().market.isIndustry(sites(getValley()).find(place=>place.id===id))?'mill':'town');
   }
-  function inspectRoute(index){routeIndex=index;open('detail');}
+  function inspectRoute(index,vehicle=null){routeIndex=index;selectedTrain=vehicle;railDraft=null;railFeedback='';open('detail');}
+  const isRail=route=>route?.mode==='rail';
+  const isRailPlatform=platform=>isRail(platform)||isRail(platform.station);
+  const transportMode=route=>isRail(route)?'rail':'road';
   function inspectRoutes(indices){
     if(indices.length===1){inspectRoute(indices[0]);return;}
     routeChoices=indices;
@@ -226,11 +231,16 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       if(view==='detail'){
         const route=routes[routeIndex];
         const kind=m.isFreight(route)?'truck':'bus';
-        footer.append(button('Add '+kind+' · '+cash(m.vehiclePrice),()=>{
-          m.purchase(route);save();render();
-        },'buy'),button('Remove '+kind,()=>{
-          m.retireVehicle(route);save();redraw();render();
-        },'removeVehicle'));
+        if(isRail(route)){
+          body.insertBefore(node('section','','railManagement'),more);
+          if(editRailRoute)footer.append(button('Edit track and stations',()=>{open('');editRailRoute(route,routeIndex);},'loopAction'));
+        }else{
+          footer.append(button('Add '+kind+' · '+cash(m.vehiclePrice),()=>{
+            m.purchase(route);save();render();
+          },'buy'),button('Remove '+kind,()=>{
+            m.retireVehicle(route);save();redraw();render();
+          },'removeVehicle'));
+        }
         if(!route.local&&m.isFreight(route)){
           const select=picker([['0','Leave immediately'],['0.25','Up to ¼ week'],['0.5','Up to ½ week'],
             ['1','Up to 1 week'],['2','Up to 2 weeks'],['full','Until full']],
@@ -249,8 +259,13 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       }else if(view==='town')footer.append(button('Add roads',()=>{const id=townId;open('');editTown('roads',id);},'buy'));
       else if(view==='stop'&&selectedStop.platform.station){
         const station=selectedStop.platform.station;
-        footer.append(button('Edit station',()=>{open('');editStation(station);},'buy'));
-        if(valley.region){
+        const rail=isRailPlatform(selectedStop.platform);
+        const edit=rail?editRailStation:editStation;
+        if(edit)footer.append(button('Edit station',()=>{open('');edit(station);},'buy'));
+        if(rail&&deleteRailStation&&!valley.transport.routes.some(route=>isRail(route)&&route.stations.some(stop=>ContourTown.stationKey(stop)===selectedStop.key))){
+          footer.append(button('Remove station',()=>open('removeStation'),'loopAction'));
+        }
+        if(valley.region&&!rail){
           const hub=ContourTown.stationKey(station);
           const depot=m.source(station)?.depot||m.depots().some(site=>site.hubKey===hub);
           const action=button(depot?'Open trading depot':'Add trading depot · 18,000 cr',()=>{
@@ -276,23 +291,25 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
   }
   function routeInspector(valley,overview,data){
     const m=valley.market,r=[...valley.transport.routes,...m.localRoutes][routeIndex],s=m.fleet(r);
-    const freight=m.isFreight(r),noun=freight?'truck':'bus',plural=freight?'trucks':'buses';
+    const rail=isRail(r),freight=m.isFreight(r),noun=rail?'train':freight?'truck':'bus',plural=rail?'trains':freight?'trucks':'buses';
     const retiring=s.vehicles.filter(v=>v.retiring).length;
     const count=s.vehicles.length,onBoard=s.vehicles.reduce((n,v)=>n+v.load,0);
     const blocked=s.vehicles.filter(v=>v.waiting==='storage').length;
     const waiting=s.vehicles.filter(v=>v.waiting==='orders').length;
     const filling=s.vehicles.filter(v=>v.waiting==='filling').length;
     const waitingInputs=s.vehicles.filter(v=>v.waiting==='inputs').length;
-    const queued=s.vehicles.filter(v=>(r.local||!m.staged(routeIndex,v))&&(v.waiting==='bay'||v.waiting==='traffic')).length;
+    const queued=s.vehicles.filter(v=>(rail||r.local||!m.staged(routeIndex,v))&&['bay','traffic','signal'].includes(v.waiting)).length;
     const last=s.lastMonth,net=last?profit(last):null;
     const signed=n=>(n>0?'+':n<0?'−':'')+cash(Math.abs(n));
     const {actual,potential}=m.routeThroughput(r,routeIndex);
     const service=node('div','','inspectorContext inspectorService');
-    service.append(hud.icon(routeCargo(m,r)),document.createTextNode(m.kind(r)+' · '+(r.local?'Local':'Intercity')));
+    const cargo=routeCargo(m,r);
+    const totalCapacity=rail?s.vehicles.reduce((sum,v)=>sum+m.vehicleCapacity(r,v),0):count*m.capacity(r);
+    service.append(hud.icon(rail?'train':cargo),document.createTextNode(m.kind(r)+' · '+(rail?'Rail':r.local?'Local':'Intercity')));
     overview.append(service,stats(['Last month’s profit',net===null?'—':signed(net),net==null?'':net<0?'negative':'positive'],
       ['Fleet',count+' '+(count===1?noun:plural)]),
       meters(meter('Monthly throughput',actual==null||!potential?null:actual/potential,{value:(actual??'—')+' / '+Math.round(potential)}),
-        meter('On board',count?onBoard/(count*m.capacity(r)):null,{value:onBoard+' / '+count*m.capacity(r),cargo:routeCargo(m,r)})));
+        meter('On board',totalCapacity?onBoard/totalCapacity:null,{value:onBoard+' / '+totalCapacity,cargo})));
     const active=r.local||m.isActive(...r.stations.map(m.source));
     if(!count)overview.append(node('p','No vehicles assigned.','inspectorNotice'));
     else if(r.local&&!m.validLoop(r))overview.append(node('p',r.local==='delivery'?
@@ -300,7 +317,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     else if(!active)overview.append(node('p','Starting up · service begins after the first weekly turnover.','inspectorNotice'));
     else if(m.formerDemand(m.routeTrade(r)))overview.append(node('p','Paused · this town no longer requests '+m.kind(r).toLowerCase()+'.','inspectorNotice'));
     else if(blocked)overview.append(node('p',freight?'Destination storage full · awaiting unloading space.':'Waiting to unload.','inspectorNotice warning'));
-    else if(filling)overview.append(node('p','Waiting at the loading bay for stock'+(queued?' · '+queued+' queued':'')+'.','inspectorNotice'));
+    else if(filling)overview.append(node('p','Waiting at the '+(rail?'platform':'loading bay')+' for stock'+(queued?' · '+queued+' queued':'')+'.','inspectorNotice'));
     else if(waitingInputs)overview.append(node('p','Pickup waiting for the factory’s inputs.','inspectorNotice'));
     else if(queued)overview.append(node('p',queued+' '+(queued===1?noun:plural)+' queued','inspectorNotice'));
     else if(waiting)overview.append(node('p',freight?waiting+' waiting for orders or storage space.':'Waiting for passengers.','inspectorNotice'));
@@ -314,8 +331,8 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       row('This month’s profit',signed(profit(s.thisMonth))),
       row('Lifetime costs',cash(s.expenses)),row('Lifetime profit',signed(profit(s))),
       node('h3','Service'),row('Delivered',s.delivered+(freight?' loads':' passengers')),
-      row('Vehicle distance',s.km.toFixed(2)+' km'),row(r.local?'Setup cost':'Road construction',r.capital?cash(r.capital):'Legacy road'),
-      row('Queued on road',queued),row('Waiting to unload',blocked),row('Waiting to fill',filling),row('Finishing before removal',retiring),
+      row('Vehicle distance',s.km.toFixed(2)+' km'),row(r.local?'Setup cost':rail?'Track construction':'Road construction',r.capital?cash(r.capital):rail?'—':'Legacy road'),
+      row(rail?'Queued on track':'Queued on road',queued),row('Waiting to unload',blocked),row('Waiting to fill',filling),row('Finishing before removal',retiring),
       row(freight?'Waiting for orders':'Waiting for riders',waiting));
     if(r.local){
       data.append(row('Loop length',Math.round(r.length*40)+' m'),row('Stops',r.stops.length),
@@ -324,11 +341,12 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     for(const station of r.stations){
       const key=ContourTown.stationKey(station),platform=valley.platforms?.get(key);
       if(!freight)data.append(row(station.name+' station · waiting',m.waitingAt(key).length));
-      data.append(row(station.name,m.isIndustry(m.source(station))?'Industry loading bay':m.catchment(station).length+' homes in range'));
+      data.append(row(station.name,m.isIndustry(m.source(station))?(rail?'Industry platform':'Industry loading bay'):m.catchment(station).length+' homes in range'));
       if(platform)data.append(button('Open '+station.name+' station',()=>{
         selectedStop={key,platform};open('stop');
       },'menuItem'));
     }
+    if(rail){renderRailManagement(valley,r,s,cargo);return;}
     footer.querySelector('.removeVehicle').disabled=count===retiring;
     if(!r.local){
       data.append(node('h3','Station bays'));
@@ -338,6 +356,172 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       });
     }
     footer.querySelector('.buy').disabled=m.state.cash<m.vehiclePrice||m.formerDemand(m.routeTrade(r))||(r.local&&!m.validLoop(r));
+  }
+  function renderRailManagement(valley,route,fleet,cargo){
+    const section=body.querySelector('.railManagement'),m=valley.market;
+    const vehicles=fleet.vehicles;
+    const hasTrain=vehicles.includes(selectedTrain);
+    if(!hasTrain)selectedTrain=null;
+    if(railDraft?.vehicle&&!vehicles.includes(railDraft.vehicle)){
+      railDraft=null;railFeedback='The train has left the fleet.';
+    }
+    const model=ContourRail;
+    const defaultConsist=()=>model.defaultConsist(cargo);
+    const copyConsist=({locomotives,cars})=>({locomotives:[...locomotives],cars:[...cars]});
+    const action=(label,handler,cls)=>button(label,()=>{handler();render();},cls);
+    const startDraft=vehicle=>{
+      railDraft={vehicle,consist:copyConsist(vehicle?.consist??defaultConsist())};railFeedback='';
+      render();
+      const editor=section.querySelector('.railConsist');
+      if(editor)body.scrollTop+=editor.getBoundingClientRect().top-body.getBoundingClientRect().top-6;
+    };
+    const unit=cargo==='passengers'?'riders':'loads';
+    const kmh=speed=>Math.round(speed??0)+' km/h';
+    const waits={block:'Waiting for clear track',signal:'Waiting for a signal',meet:'Waiting for opposing train',
+      traffic:'Waiting for clear track',bay:'Waiting for platform',platform:'Waiting for platform',orders:'Waiting for orders',
+      filling:'Loading',storage:'Waiting for storage',inputs:'Waiting for inputs',loading:'Loading',station:'At station',
+      departure:'Awaiting departure',track:'Waiting for clear track',traction:'Insufficient tractive effort',
+      held:'Held at station'};
+    const heading=node('div','','railFleetHeading');
+    heading.append(hud.icon('train'),node('h3','Trains'),button('Add train',()=>startDraft(null),'buy'));
+    const controls=node('div',''),liveReadout=node('div',''),trainActions=node('div','','railActions'),draftSlot=node('div','');
+    controls.append(heading);
+    if(!selectedTrain&&vehicles.length&&!railDraft)selectedTrain=vehicles[0];
+    if(vehicles.length){
+      const vehicle=selectedTrain;
+      const selector=picker([...(vehicle?[]:[['','Choose a train']]),
+        ...vehicles.map((v,i)=>[String(i),'Train '+(v.id??i+1)+(v.retiring?' · retiring':'')])],
+        vehicle?String(vehicles.indexOf(vehicle)):'',value=>{
+          if(value==='')return;
+          selectedTrain=vehicles[Number(value)];railDraft=null;railFeedback='';render();
+        },'Select train');
+      controls.append(selector);
+      if(vehicle){
+        const live=m.railStatus(route,vehicle);
+        const quote=model.quote(vehicle.consist??defaultConsist(),cargo);
+        const parts=vehicle.consist??defaultConsist();
+        const engines=parts.locomotives.length,wagons=parts.cars.length;
+        const movement=waits[live.waiting]??(live.braking?'Braking':live.tracting?'Pulling':live.speed>0?'Coasting':'At station');
+        const status=vehicle.retiring?'Retiring after unloading':live.hold&&live.waiting!=='held'?movement+' · hold requested':movement;
+        const operating=m.railRunningCost?.(parts);
+        liveReadout.append(node('small',engines+' '+(engines===1?'locomotive':'locomotives')+' · '+wagons+' '+
+          (cargo==='passengers'?(wagons===1?'coach':'coaches'):(wagons===1?'wagon':'wagons'))+' · '+Math.round(quote.length)+' m'),meters(
+          meter('Live speed',live.speed/quote.maxSpeed,{cargo:'speed',value:kmh(live.speed)}),
+          meter('On board',vehicle.load/live.capacity,{cargo,value:vehicle.load+' / '+live.capacity+' '+unit}),
+          meter('Current mass',live.mass/quote.loadedMass,{cargo:'mass',value:Math.round(live.mass)+' t'})),
+          node('p',status,'inspectorNotice'));
+        if(Number.isFinite(live.grade)||Number.isFinite(live.curveRadius)||operating!=null){
+          const profile=[];
+          if(Number.isFinite(live.grade))profile.push(live.grade.toFixed(1)+'% grade');
+          if(Number.isFinite(live.curveRadius))profile.push(Math.round(live.curveRadius)+' m radius');
+          if(operating!=null)profile.push(cash(operating)+'/km');
+          liveReadout.append(node('small',profile.join(' · '),'railLiveProfile'));
+        }
+        const edit=button('Edit consist',()=>startDraft(vehicle));
+        const retire=action('Retire train',()=>{
+          if(m.retireVehicle(route,vehicle)){if(railDraft?.vehicle===vehicle)railDraft=null;save();redraw();}
+        });
+        edit.disabled=retire.disabled=!!vehicle.retiring;
+        trainActions.append(edit,retire);
+        if(m.setRailHold){
+          const hold=action(live.hold?'Release hold':'Hold at station',()=>{
+            if(m.setRailHold(route,vehicle,!m.railStatus(route,vehicle).hold)){save();redraw();}
+          });
+          hold.disabled=!!vehicle.retiring;
+          trainActions.append(hold);
+        }
+      }
+    }
+    if(railDraft){
+      const {consist,vehicle}=railDraft;
+      const run=valley.truckRuns[routeIndex];
+      const estimate=railDraft.estimate??=model.estimate(consist,cargo,run);
+      const draft=node('div','','railConsist');
+      draft.append(node('h4',vehicle?'Edit train consist':'New train consist'));
+      const eligibleCars=Object.entries(model.cars).filter(([,item])=>item.type===(cargo==='passengers'?'passengers':'freight'));
+      for(const [title,part,options,limit] of [['Locomotives','locomotives',Object.entries(model.locomotives),4],
+        [cargo==='passengers'?'Coaches':'Wagons','cars',eligibleCars,12]]){
+        draft.append(node('h5',title));
+        for(const [id,item] of options){
+          const line=node('div','','railStepper');
+          const count=consist[part].filter(value=>value===id).length;
+          const name=node('span',item.name);
+          name.title=cash(item.price)+' · '+item.mass+' t empty · '+(part==='cars'?item.capacity+' '+unit:item.power+' kW');
+          const change=(delta)=>{
+            if(delta>0)consist[part].push(id);
+            else consist[part].splice(consist[part].lastIndexOf(id),1);
+            railDraft.estimate=null;
+            railFeedback='';
+          };
+          const minus=action('−',()=>change(-1)),plus=action('+',()=>change(1));
+          minus.dataset.railControl=part+'-'+id+'-remove';plus.dataset.railControl=part+'-'+id+'-add';
+          minus.setAttribute('aria-label','Remove '+item.name);
+          plus.setAttribute('aria-label','Add '+item.name);
+          minus.disabled=!count||consist[part].length<=1;
+          plus.disabled=consist[part].length>=limit;
+          line.append(name,minus,node('output',count),plus);draft.append(line);
+        }
+      }
+      const shortest=Math.min(...route.stations.map(station=>(station.platformLength??2.4)*model.metresPerUnit));
+      const tooLong=estimate.length>shortest;
+      const power=estimate.power,loaded=estimate.loadedMass;
+      const grade=estimate.maxGrade??0,radius=estimate.minRadius??Infinity;
+      const gradeSpeed=estimate.gradeSpeed??model.speedLimit?.(estimate,grade,Infinity);
+      const curveSpeed=estimate.curveSpeed??model.speedLimit?.(estimate,0,radius);
+      const maxSpeed=estimate.maxSpeed;
+      const shortestLocomotive=Math.min(...Object.values(model.locomotives).map(item=>item.length));
+      const maximumCapacity=Math.max(...eligibleCars.map(([,item])=>
+        Math.min(12,Math.max(1,Math.floor((shortest-shortestLocomotive)/item.length)))*item.capacity));
+      draft.append(meters(
+        meter('Capacity',estimate.capacity/maximumCapacity,{cargo,value:estimate.capacity+' '+unit}),
+        meter('Loaded mass',loaded?(loaded-estimate.emptyMass)/loaded:0,{cargo:'mass',value:Math.round(loaded)+' t',label:'Loaded mass · cargo share'}),
+        meter('Steepest grade',Number.isFinite(gradeSpeed)?gradeSpeed/maxSpeed:null,{
+          cargo:'grade',value:grade.toFixed(1)+'%'+(Number.isFinite(gradeSpeed)?' · '+kmh(gradeSpeed):'')}),
+        meter('Tightest curve',Number.isFinite(curveSpeed)?curveSpeed/maxSpeed:null,{
+          cargo:'curve',value:Number.isFinite(radius)?Math.round(radius)+' m'+(Number.isFinite(curveSpeed)?' · '+kmh(curveSpeed):''):'Straight'})));
+      const performance=node('small',power.toLocaleString('en-GB')+' kW · '+estimate.tractiveEffort+' kN');
+      performance.title='Tractive effort is the pull available when starting. Power helps sustain speed once the train is moving.';
+      draft.append(performance,node('small',Math.round(estimate.length)+' m train / '+Math.round(shortest)+' m shortest platform'));
+      const operating=m.railRunningCost?.(consist);
+      if(operating!=null)draft.append(node('small','Running cost · '+cash(operating)+'/km'));
+      if(Number.isFinite(estimate.travel)&&Number.isFinite(estimate.returnTravel)){
+        draft.append(node('small','Loaded travel · '+Math.round(estimate.travel)+' s out / '+Math.round(estimate.returnTravel)+' s back'));
+      }
+      const live=vehicle?m.railStatus(route,vehicle):null;
+      const price=vehicle?m.consistEditPrice(route,vehicle,consist):estimate.price;
+      const unchanged=vehicle&&JSON.stringify(consist)===JSON.stringify(vehicle.consist);
+      const message=railFeedback||(!estimate.valid?estimate.reason:tooLong?'Train exceeds the shortest platform.':
+        estimate.stalled?'The loaded train cannot climb this grade. Add power or remove wagons.':
+        live&&!live.canEdit?(live.hold?'Waiting for an empty train at a station.':'Hold the train to edit at its next station stop.'):
+        m.state.cash<price?'Insufficient funds.':'');
+      if(message)draft.append(node('p',message,'inspectorNotice warning'));
+      const actions=node('div','','railActions');
+      const confirm=action((vehicle?'Apply':'Purchase')+(Number.isFinite(price)?' · '+cash(price):''),()=>{
+        const ok=vehicle?m.setConsist(route,vehicle,copyConsist(consist)):m.purchase(route,copyConsist(consist));
+        if(ok){
+          selectedTrain=vehicle??vehicles.at(-1);railDraft=null;railFeedback='';save();redraw();
+        }else railFeedback=vehicle?'Could not apply this consist.':'Could not purchase this train.';
+      },'buy');
+      confirm.disabled=!estimate.valid||tooLong||estimate.stalled||m.state.cash<price||!!(live&&!live.canEdit)||!!unchanged||
+        (!vehicle&&m.formerDemand(m.routeTrade(route)));
+      actions.append(action('Cancel',()=>{railDraft=null;railFeedback='';}),confirm);
+      draft.append(actions);draftSlot.append(draft);
+    }else if(railFeedback)draftSlot.append(node('p',railFeedback,'inspectorNotice'));
+    const active=document.activeElement;
+    if(!section.childElementCount)for(let i=0;i<4;i++)section.append(node('div',''));
+    const [controlHolder,liveHolder,actionHolder,draftHolder]=section.children;
+    controls.dataset.train=controls.querySelector('select')?.value??'';
+    const selectorFocused=controlHolder.contains(active)&&active.tagName==='SELECT';
+    const activeKey=active?.dataset.railControl;
+    replaceContent(controlHolder,controls);
+    if(!liveHolder.childElementCount)liveHolder.append(node('div',''),node('div',''));
+    replaceContent(liveHolder,liveReadout);
+    if(section.train!==selectedTrain){section.train=selectedTrain;actionHolder.replaceChildren(trainActions);}
+    else replaceContent(actionHolder,trainActions);
+    if(section.draft!==railDraft){section.draft=railDraft;draftHolder.replaceChildren(draftSlot);}
+    else replaceContent(draftHolder,draftSlot);
+    if(!active?.isConnected&&activeKey)draftHolder.querySelector('[data-rail-control="'+activeKey+'"]:not(:disabled)')?.focus({preventScroll:true});
+    else if(!active?.isConnected&&selectorFocused)controlHolder.querySelector('select')?.focus({preventScroll:true});
   }
   function townInspector(valley,overview,data){
     const m=valley.market,t=valley.towns.find(city=>city.id===townId),tot=m.townTotals(t);
@@ -520,7 +704,18 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
   function stopInspector(v,overview,data){
     const m=v.market;
     const {key,platform:p}=selectedStop;
-    const bays=p.station&&v.transport.stationLayouts?.[window.contourStationKey(p.station)]?.bays;
+    const rail=isRailPlatform(p);
+    const bays=!rail&&p.station&&v.transport.stationLayouts?.[window.contourStationKey(p.station)]?.bays;
+    if(rail){
+      const station=p.station??p;
+      const served=v.transport.routes.map((route,index)=>({route,index})).filter(({route})=>
+        isRail(route)&&route.stations.some(stop=>ContourTown.stationKey(stop)===key));
+      const heading=node('div','','inspectorContext inspectorService');
+      heading.append(hud.icon('train'),document.createTextNode('Rail · '+(station.terminal||station.kind==='terminal'?'Terminal':'Through station')));
+      overview.append(heading,stats(['Platform',Math.round((station.platformLength??2.4)*ContourRail.metresPerUnit)+' m'],
+        ['Lines',served.length]));
+      for(const {route,index} of served)data.append(button('Line '+(index+1)+' · '+routeName(route),()=>inspectRoute(index),'menuItem'));
+    }
     if(bays?.length>1){
       const chooser=node('div','','inspectorCargoList');
       for(const bay of bays)chooser.append(button('Bay '+bay.id,()=>{open('');editStation(p.station,bay.id);},'stationBayShortcut'));
@@ -644,7 +839,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
         const account=m.fleet(route);
         const waits={};
         for(const vehicle of account.vehicles)if(vehicle.waiting)waits[vehicle.waiting]=(waits[vehicle.waiting]??0)+1;
-        return {line:index+1,name:routeName(route),service:m.kind(route),local:route.local??null,
+        return {line:index+1,name:routeName(route),service:m.kind(route),mode:transportMode(route),local:route.local??null,
           vehicleCapacity:m.capacity(route),fleet:account.vehicles.length,onBoard:account.vehicles.reduce((sum,v)=>sum+v.load,0),
           waitingVehicles:account.vehicles.filter(v=>v.waiting).length,waitingByReason:waits,
           ...(!route.local&&m.isFreight(route)?{fillWait:route.fillWait??0}:{}),
@@ -694,10 +889,11 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     el('toggleRoutes').setAttribute('aria-pressed',String(overlay==='routes'));panel.hidden=!view;
     panel.classList.toggle('financePanel',view==='finance');
     panel.classList.toggle('inspectorPanel',inspectors.has(view));
+    panel.classList.toggle('railPanel',view==='detail'&&isRail(rs[routeIndex]));
     footer.hidden=!inspectors.has(view)||view==='home'||(view==='stop'&&!selectedStop?.platform.station);
     el('toolMenu').setAttribute('aria-expanded',String(!!view));
     if(!view){delete body.dataset.inspector;return;}
-    const title={tools:'Network tools',build:'New route',routes:'Existing routes',routeChoice:'Choose a route',detail:'Route accounts',towns:'Towns and industries',town:'Town demand',layers:'Map overlays',mill:'Valley Sawmill',settings:'Settings',restart:'Restart valley',deleteLoop:'Delete loop',removeRoute:'Remove route',finance:'Company history'}[view];
+    const title={tools:'Network tools',build:'New route',routes:'Existing routes',routeChoice:'Choose a route',detail:'Route accounts',towns:'Towns and industries',town:'Town demand',layers:'Map overlays',mill:'Valley Sawmill',settings:'Settings',restart:'Restart valley',deleteLoop:'Delete loop',removeRoute:'Remove route',removeStation:'Remove station',finance:'Company history'}[view];
     if(inspectors.has(view)){
       const name=view==='home'?v.towns.find(t=>t.id===selectedHome.cityId)?.name+' · '+(selectedHome.service==='starter'?'Starter goods':selectedHome.service==='timber'?'Timber':'Passengers'):view==='stop'?selectedStop.platform.name:view==='detail'?routeName(rs[routeIndex]):view==='mill'?sites(v).find(site=>site.id===townId).name:v.towns.find(t=>t.id===townId).name;
       if(el('panelTitle').textContent!==name)el('panelTitle').textContent=name;
@@ -708,7 +904,8 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     el('panelTitle').textContent=title;body.replaceChildren();
     if(view==='finance')finance(v);
     if(view==='build'){
-      body.append(button('Town or industry route',()=>{open('');buildRoute();},'menuItem'));
+      body.append(button('Road route',()=>{open('');buildRoute('road');},'menuItem'));
+      body.append(button('Rail route',()=>{open('');buildRoute('rail');},'menuItem'));
       body.append(button('Local bus loop',()=>{open('');editTown('bus');},'menuItem'));
       body.append(button('Local delivery loop',()=>{open('');editTown('delivery');},'menuItem'));
     }
@@ -721,7 +918,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       for(const [id,name] of [['standard','Standard map'],['range','Station catchments'],[v.region?'service:starter':'service:timber',cargoLabel],['service:passengers','Passenger satisfaction'],['routes','Routes and vehicles']])
         body.append(button((overlay===id?'✓  ':'')+name,()=>setOverlay(id),'menuItem'));
       if(overlay==='range')body.append(node('small','Green dots mark homes reached along connected streets. Local stops can extend coverage beyond a station.'));
-      if(overlay==='routes')body.append(node('small','Tap a highlighted road or vehicle badge for its accounts. Badges show line number and load / capacity. Q marks a queue. Full means the town has no room to unload.'));
+      if(overlay==='routes')body.append(node('small','Tap a highlighted route or vehicle badge for its accounts. Badges show line number and load / capacity. Q marks a queue. Full means the town has no room to unload.'));
 
     }
     if(view==='routeChoice'){
@@ -731,7 +928,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
         const choice=button('',()=>inspectRoute(index),'routeItem routeChoice');
         const dot=node('span','','routeChoiceColor');
         dot.style.backgroundColor=ContourRouteOverlay.color(index);
-        choice.append(dot,node('strong',routeName(route)),node('small','Line '+(index+1)+' · '+m.kind(route)));
+        choice.append(dot,node('strong',routeName(route)),node('small','Line '+(index+1)+' · '+(isRail(route)?'Rail · ':'')+m.kind(route)));
         body.append(choice);
       }
       return;
@@ -741,20 +938,21 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       const locations=[...v.towns,...sites(v)];
       const cargo=[...new Set(rs.map(m.kind))].sort();
       filters.append(picker([['','All places'],...locations.map(t=>[t.id,t.name])],filter,x=>{filter=x;render();},'Filter by place'),
-        picker([['','All services'],...cargo.map(name=>[name,name])],type,x=>{type=x;render();},'Filter by service'));
+        picker([['','All services'],...cargo.map(name=>[name,name])],type,x=>{type=x;render();},'Filter by service'),
+        picker([['','Road and rail'],['road','Road'],['rail','Rail']],mode,x=>{mode=x;render();},'Filter by transport mode'));
       body.append(filters,node('small','Monthly throughput · actual / potential'));
       let count=0;rs.forEach((r,i)=>{
-        if(filter&&!r.stations.some(s=>m.source(s)?.id===filter)||type&&m.kind(r)!==type)return;
+        if((filter&&!r.stations.some(s=>m.source(s)?.id===filter))||(type&&m.kind(r)!==type)||(mode&&transportMode(r)!==mode))return;
         const last=m.fleet(r).lastMonth,net=last?profit(last):null,kind=m.kind(r);
         const b=button('',()=>inspectRoute(i),'routeItem');
         const {actual,potential}=m.routeThroughput(r,i);
         const units=m.isFreight(r)?'loads':'riders';
-        const icon=hud.icon(routeCargo(m,r));
+        const icon=hud.icon(isRail(r)?'train':routeCargo(m,r));
         icon.setAttribute('aria-hidden','true');
-        b.setAttribute('aria-label','Line '+(i+1)+', '+kind+', '+routeName(r)+', '+
+        b.setAttribute('aria-label','Line '+(i+1)+', '+(isRail(r)?'rail':'road')+', '+kind+', '+routeName(r)+', '+
           (actual===null?'actual throughput pending':actual+' '+units+' completed last month')+
           ', estimated potential '+Math.round(potential)+' '+units+' per month'+(net===null?'':', '+cash(net)+' last month'));
-        const throughput=node('small',kind+' · '+(actual??'—')+' / '+Math.round(potential)+' '+units,'routeThroughput');
+        const throughput=node('small',(isRail(r)?'Rail · ':'')+kind+' · '+(actual??'—')+' / '+Math.round(potential)+' '+units,'routeThroughput');
         throughput.title='Last month completed / estimated capacity with the current fleet and no queues';
         b.append(icon,node('strong',routeName(r)),node('small',net===null?'—':cash(net),net===null?'':net<0?'negative':'positive'),throughput);
         body.append(b);count++;
@@ -787,7 +985,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       body.append(row('Valley seed',v.seed),balance,node('small','Level 1 onward. Base decay = 4 + 3 × level + population ÷ 64 per week.'),
         button('Copy balance report',()=>copyBalanceReport(v,feedback),'menuItem'),feedback,
         button(v.region?'Open classic valley save':'Open Three Biomes save',()=>{
-          if(switchRegion()){filter=type=statsTown='';financeEnd=null;open('');}
+          if(switchRegion()){filter=type=mode=statsTown='';financeEnd=null;open('');}
         },'menuItem'),
         button(v.region?'Restart Three Biomes':'Restart with a new valley',()=>open('restart'),'menuItem'));
 
@@ -796,16 +994,24 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       const route=rs[routeIndex];
       body.append(node('p','Remove '+routeName(route)+'? '+(route.local?
         'This removes the loop and its vehicles. Shared stops stay in place.':
-        'This removes the service and its vehicles. Roads and stations stay available for future routes.')));
+        'This removes the service and its vehicles. '+(isRail(route)?'Tracks':'Roads')+' and stations stay available for future routes.')));
       body.append(button('Confirm removal',()=>{(route.local?deleteLoop:deleteRoute)(route);open('routes');},'restartAction'));
       body.append(button('Cancel',()=>open('detail'),'back'));
+      return;
+    }
+    if(view==='removeStation'){
+      const {station,name}=selectedStop.platform;
+      body.append(node('p','Remove '+name+'?'),button('Confirm removal',()=>{
+        if(deleteRailStation(station))open('');
+        else open('stop');
+      },'restartAction'),button('Cancel',()=>open('stop'),'back'));
       return;
     }
     if(view==='restart'){
       body.append(node('p','Generate a new valley and clear this valley’s roads, vehicles, finances and route draft.'));
       body.append(button('Restart valley',()=>{
         try{
-          if(restart()){overlay=baseOverlay='routes';filter=type='';financeEnd=null;statsTown='';listScroll=0;open('');return;}
+          if(restart()){overlay=baseOverlay='routes';filter=type=mode='';financeEnd=null;statsTown='';listScroll=0;open('');return;}
         }catch(error){console.error(error);}
         body.append(node('p','Could not start a new valley.'));
       },'restartAction'));
@@ -835,7 +1041,16 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
   function tick(){
     const valley=getValley();if(!valley)return;
     el('cash').textContent=cash(valley.market.state.cash);
-    if(inspectors.has(view)||view==='stop'){render();return;}
+    if(inspectors.has(view)||view==='stop'){
+      const editor=body.querySelector('.railConsist');
+      const anchor=editor?.getBoundingClientRect().top;
+      render();
+      if(editor&&railDraft){
+        const updated=body.querySelector('.railConsist');
+        if(updated)body.scrollTop+=updated.getBoundingClientRect().top-anchor;
+      }
+      return;
+    }
     if(!['routes','finance'].includes(view)||body.contains(document.activeElement))return;
     // Keep the active controls and scrolling stable while the ledger updates.
     const original=[...body.childNodes],scroll=body.scrollTop;
@@ -850,5 +1065,5 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     body.scrollTop=scroll;
     if(focused>=0)body.children[focused]?.focus({preventScroll:true});
   }
-  return {render,open,tick,clock,inspectPlace,inspectRoute,inspectRoutes,inspectStop(key,platform){selectedStop={key,platform};open('stop');},inspectHome(cityId,lotId,service){selectedHome={cityId,lotId,service};open('home');},get selectedHome(){return view==='home'?selectedHome:null;},get labels(){return labels;},get activeRoute(){return view==='detail'?routeIndex:null;},get overlay(){return overlay;},get view(){return view;}};
+  return {render,open,tick,clock,inspectPlace,inspectRoute,inspectVehicle:inspectRoute,inspectRoutes,inspectStop(key,platform){selectedStop={key,platform};open('stop');},inspectHome(cityId,lotId,service){selectedHome={cityId,lotId,service};open('home');},get selectedHome(){return view==='home'?selectedHome:null;},get labels(){return labels;},get activeRoute(){return view==='detail'?routeIndex:null;},get overlay(){return overlay;},get view(){return view;}};
 };

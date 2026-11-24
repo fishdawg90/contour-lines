@@ -238,13 +238,16 @@ function roadSections(route){
   return spans.map(([start,end])=>route.points.slice(start,end)).filter(points=>points.length>1);
 }
 function roadEntries(transport){
-  return [...transport.routes.map((route,index)=>[route.roadId??index,route]),
+  return [...transport.routes.flatMap((route,index)=>route.mode==='rail'?[]:[[route.roadId??index,route]]),
     ...Object.entries(transport.roadArchive??{}).map(([id,road])=>[Number(id),road])].sort(([a],[b])=>a-b);
 }
 function archiveRoute(transport,index){
-  transport.routes.forEach((route,i)=>{route.roadId??=i;});
-  const {service,...road}=transport.routes[index];
-  (transport.roadArchive??={})[road.roadId]=road;
+  transport.routes.forEach((route,i)=>{if(route.mode!=='rail')route.roadId??=i;});
+  const archived=transport.roadArchive??={};
+  if(transport.routes[index].mode!=='rail'){
+    const {service,...road}=transport.routes[index];
+    archived[road.roadId]=road;
+  }
   transport.routes.splice(index,1);
 }
 function stationBay(transport,route,side){

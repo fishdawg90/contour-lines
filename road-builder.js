@@ -37,7 +37,8 @@ function curve(points,startHeading,endHeading) {
     }
     const a=points[i-1],b=points[i+1];
     const n=distance(a,b)||1,reach=Math.min(distance(a,p),distance(p,b));
-    return {x:(b.x-a.x)*reach/n,y:(b.y-a.y)*reach/n};
+    return p.direction?{x:p.direction.x*reach,y:p.direction.y*reach}:
+      {x:(b.x-a.x)*reach/n,y:(b.y-a.y)*reach/n};
   });
   for (let i=0; i<points.length-1; i++) {
     const a=points[i],b=points[i+1],u=tangents[i],v=tangents[i+1];
@@ -94,11 +95,12 @@ function sectionEarthwork(ground,p,heightScale,width=FORMATION){
   return result;
 }
 const MIN_RADIUS=120, MAX_RADIUS=1200;
-function verticalDesign(levels,length,heightScale,startGrade=0,endGrade=0){
+function verticalDesign(levels,length,heightScale,startGrade=0,endGrade=0,railApproaches){
   const approach=Math.min(.65,length*.11);
-  const points=[{d:0,z:levels[0].z},{d:approach,z:levels[0].z+startGrade*approach,radius:MIN_RADIUS},
-    ...levels.slice(1,-1).map(p=>({d:lerp(approach,length-approach,p.f),z:p.z,radius:p.radius})),
-    {d:length-approach,z:levels.at(-1).z-endGrade*approach,radius:MIN_RADIUS},{d:length,z:levels.at(-1).z}];
+  const [start,end]=railApproaches?railApproaches.map(span=>Math.min(length*.43,Math.max(approach,span+.18))):[approach,approach];
+  const points=[{d:0,z:levels[0].z},{d:start,z:levels[0].z+startGrade*start,radius:MIN_RADIUS},
+    ...levels.slice(1,-1).map(p=>({d:lerp(start,length-end,p.f),z:p.z,radius:p.radius})),
+    {d:length-end,z:levels.at(-1).z-endGrade*end,radius:MIN_RADIUS},{d:length,z:levels.at(-1).z}];
   const grades=points.slice(1).map((p,i)=>(p.z-points[i].z)/(p.d-points[i].d));
   const curveAt=(p,i)=>{
     const delta=grades[i]-grades[i-1];
@@ -127,7 +129,7 @@ function verticalDesign(levels,length,heightScale,startGrade=0,endGrade=0){
     const start=points[Math.max(0,index-1)];
     return start.z+(d-start.d)*grades[Math.max(0,index-1)];
   }
-  return {elevation,grades,curves,fits,approach};
+  return {elevation,grades,curves,fits,approach,approaches:[start,end]};
 }
 window.roadEarthworks={section:sectionEarthwork,design:designTerrain,formation:FORMATION};
 
@@ -224,6 +226,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
       if(length>=.6)found.set(key,{...fit(station),shared:{key,points,length}});
     }
     for(const station of getValley().builtStations){
+      if(station.mode==='rail')continue;
       const key=choiceKey(station);
       if(belongs(station)&&eligible(station)&&!found.has(key))found.set(key,{...fit(station),existingBay:true});
     }
@@ -494,7 +497,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     for(const [index,route] of ContourTown.roadEntries(valley.transport)){
       ContourTown.roadSections(route).forEach((nodes,part)=>roads.push({id:'built/'+index+'/'+part,nodes}));
     }
-    const stations=draft.roadMode?[...valley.builtStations,...draft.stations]:[];
+    const stations=draft.roadMode?[...valley.builtStations.filter(station=>station.mode!=='rail'),...draft.stations]:[];
     const seen=new Set();
     for(const station of stations){
       const id='bay/'+choiceKey(station);
@@ -714,11 +717,15 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     sectionCache.set(key,section);
     return section;
   }
-  function designSection(start,end,startHeading,endHeading,edits,startGrade=0,endGrade=0){
+  function designSection(start,end,startHeading,endHeading,edits,startGrade=0,endGrade=0,railApproaches){
     const valley=getValley();
     if(distance(start,end)<1e-5)return {path:[start],length:0,maxGrade:0,cut:0,fill:0,waterLength:0,maxEarthwork:0,
       issue:Math.abs(start.z-end.z)>.001?'Leave room to connect roads at different heights.':''};
-    const path=curve([start,...edits.handles,end],startHeading,endHeading);
+    const back=railApproaches?.[1],forward=railApproaches?.[0];
+    const guide=forward?[{...along(start,startHeading.x,startHeading.y,forward),direction:startHeading}]:[];
+    const arrival=back?[{...along(end,-endHeading.x,-endHeading.y,back),direction:endHeading}]:[];
+    const path=curve([start,...guide,...edits.handles,...arrival,end],startHeading,endHeading);
+    const gradeLimit=railApproaches?4:MAX_GRADE;
     let length=0;
     for(let i=0;i<path.length;i++){
       const p=path[i];
@@ -729,7 +736,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
     }
     const bridgeClearance=.20;
     const levels=[{z:start.z},...edits.vips,{z:end.z}];
-    const design=verticalDesign(levels,length,heightScale,startGrade,endGrade);
+    const design=verticalDesign(levels,length,heightScale,startGrade,endGrade,railApproaches);
     const maxGrade=Math.max(...design.grades.map(g=>Math.abs(g)))*heightScale/WORLD_METRES*100;
     let cut=0,fill=0,waterLength=0,maxEarthwork=0,previous=null;
     for(let i=0;i<path.length;i++){
@@ -748,7 +755,7 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
       }
       previous=p.works;
     }
-    const issue=maxGrade>MAX_GRADE+.001?'Reduce the steepest grade to 8% or less.':
+    const issue=maxGrade>gradeLimit+.001?'Reduce the steepest grade to '+gradeLimit+'% or less.':
       !design.fits?'Shorten a radius, space out the VIPs, or reduce the grade change.':
       path.some(p=>p.water&&p.z<bridgeClearance-.001)?'Raise the profile so the bridge clears the water.':'';
     return {path,levels,design,length,maxGrade,cut,fill,waterLength,maxEarthwork,issue};
@@ -2144,6 +2151,10 @@ window.createRoadBuilder = function createRoadBuilder({getValley,bounds,heightSc
   new ResizeObserver(()=>{cacheKey='';request();}).observe(map);
 
   return {
+    designRailSection(from,to,leave,enter,edits){
+      const stationApproach=s=>s.kind?(s.platformLength??2.4)*(s.terminal?1:.5):0;
+      return designSection(from,to,leave,enter,edits,0,0,[stationApproach(from),stationApproach(to)]);
+    },
     openStation(base,bayId){
       $('rbBayOptions').open=false;
       begin();roadGraphCache=null;gatesCache=null;stationFaceCache.clear();preview=null;step=1;deleteMode=false;

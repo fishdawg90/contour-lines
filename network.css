@@ -232,3 +232,26 @@
   #timeControls #settings,#gameHelp{min-width:32px}
   #speed{min-width:34px}
 }
+
+#networkPanel.railPanel{width:min(365px,calc(100% - 148px))}
+.routeFilters select:last-child{grid-column:1/-1}
+.railManagement{border-top:1px solid #405047;margin-top:8px;padding-top:5px}
+.railFleetHeading{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:5px}
+#panelBody .railFleetHeading h3{margin:0}
+.railActions{display:flex;flex-wrap:wrap;gap:5px}
+#panelBody .railManagement :is(button,select){min-height:34px;padding:4px 7px;font-size:12px}
+#panelBody .railManagement button{width:auto;text-align:center}
+#panelBody .railActions button{flex:1 1 80px}
+#panelBody .railManagement button:disabled{opacity:.52;cursor:default}
+.railConsist{background:#2e3d35;border:1px solid #495b50;border-radius:8px;margin:5px 0;padding:7px}
+.railConsist h4{margin:0 0 4px;font-size:13px}
+.railConsist h5{margin:7px 0 1px;color:#c6d9ca;font-size:11px}
+.railStepper{display:grid;grid-template-columns:minmax(0,1fr) 40px 21px 40px;gap:3px;align-items:center;font-size:12px}
+.railStepper output{color:#efeddf;text-align:center;font-variant-numeric:tabular-nums}
+#panelBody .railStepper button{width:100%;font-size:15px}
+.railConsist .inspectorMeters{margin-top:8px}
+#panelBody .railLiveProfile{margin-top:0}
+@media(max-width:440px){
+  #networkPanel.railPanel{left:8px;right:116px;width:auto;max-height:76dvh}
+  .railStepper{grid-template-columns:minmax(0,1fr) 36px 16px 36px}
+}
