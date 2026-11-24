@@ -205,13 +205,17 @@
 #gameHelp{min-width:38px;min-height:44px;padding:0;border-radius:8px;border:1px solid var(--edge);color:var(--pale);background:var(--coal);font:700 17px system-ui}
 #app[inert] #brand,#app[inert] #timeControls,#app[inert] #mapPlaces,#app[inert] #serviceToggles,#app[inert] .controls{visibility:hidden}
 #startScreen[hidden],#continueGame[hidden]{display:none}
-#startScreen{position:fixed;inset:0;z-index:4;display:flex;align-items:center;overflow:auto;padding:clamp(20px,7vw,108px);color:#f6f5e7;background:linear-gradient(95deg,#172720eb 0%,#172720a6 48%,#17272032 100%)}
-.startCard{width:min(100%,365px);margin-block:auto}
-#gameTitle{font:800 clamp(56px,8vw,112px)/.89 system-ui,sans-serif;letter-spacing:-.075em;margin:0 0 30px}
+#startScreen{position:fixed;inset:0;z-index:4;display:flex;align-items:center;overflow:auto;padding:clamp(24px,6vw,100px);color:#fff;background:linear-gradient(95deg,#101914ed 0%,#10191495 34%,#10191418 70%)}
+.startCard{width:min(100%,382px);margin-block:auto}
+#gameTitle{max-width:7ch;font:650 clamp(60px,7vw,100px)/.92 system-ui,sans-serif;letter-spacing:-.065em;margin:0 0 28px}
 #gameSetup{display:grid;gap:11px}
-#gameSetup label{display:grid;gap:4px;font-weight:650;font-size:14px}
-#startScreen select,#startScreen button,#gameInstructions button{width:100%;min-height:44px;border:1px solid #748776;border-radius:8px;background:#25382fed;color:#f6f5e7;padding:7px 10px;font:inherit}
+.startFields{display:grid;grid-template-columns:1.15fr 1fr;gap:8px}
+#gameSetup label{display:grid;gap:5px;font-weight:500;font-size:12px;color:#e1e7e0}
+#startScreen select,#startScreen button,#gameInstructions button{width:100%;min-height:44px;border:1px solid #e7f3e13b;border-radius:10px;background:#131d18d9;color:#fff;padding:7px 11px;font:500 14px system-ui}
+#startScreen .buy{margin-top:3px}
 .startActions{display:flex;gap:8px;margin-top:8px}
+#startScreen #startHelp{border-color:transparent;background:transparent}
+#startScreen :focus-visible{outline:2px solid #d8f3cd;outline-offset:3px}
 #gameInstructions{width:min(430px,calc(100% - 28px));max-height:calc(100dvh - 28px);overflow:auto;background:var(--coal);color:var(--pale);border:1px solid var(--edge);border-radius:14px;padding:0}
 #gameInstructions::backdrop{background:#0c1913a3}
 #gameInstructions h2{font-size:18px;margin:0;flex:1}
@@ -219,4 +223,12 @@
 #gameInstructions li{padding-block:5px}
 #gameInstructions p{padding:0 16px 12px;margin:0;color:#c6d4c4}
 #gameInstructions button{min-width:44px;font-size:18px}
-@media(max-width:540px){#startScreen{align-items:flex-end;background:linear-gradient(0deg,#172720f5 0%,#172720b0 53%,#17272030 100%)}.startCard{margin-block:auto max(0px,env(safe-area-inset-bottom))}#gameTitle{font-size:clamp(56px,14vw,80px)}#brand b{font-size:10px}#brand svg{display:none}#timeControls #settings,#gameHelp{min-width:32px}#speed{min-width:34px}}
+@media(max-width:540px){
+  #startScreen{align-items:flex-end;padding-bottom:max(24px,env(safe-area-inset-bottom));background:linear-gradient(0deg,#101914fa 0%,#101914ac 35%,#1019140a 76%)}
+  .startCard{margin-block:auto 0}
+  #gameTitle{font-size:clamp(53px,13vw,73px);margin-bottom:20px}
+  #brand b{font-size:10px}
+  #brand svg{display:none}
+  #timeControls #settings,#gameHelp{min-width:32px}
+  #speed{min-width:34px}
+}

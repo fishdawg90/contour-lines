@@ -111,11 +111,13 @@ canvas:active{cursor:grabbing}
 </div>
 <section id="startScreen" aria-labelledby="gameTitle" hidden>
   <div class="startCard">
-    <h1 id="gameTitle">Pocket<br>Logistics</h1>
+    <h1 id="gameTitle">Pocket Logistics</h1>
     <form id="gameSetup">
+      <div class="startFields">
       <label>Map<select id="gameMap"><option value="classic">Starter Valley</option><option value="mixed">Three Biomes</option></select></label>
-      <label>Difficulty<select id="gameDifficulty"><option value="relaxed">Relaxed · 3,000,000 cr</option><option value="standard" selected>Standard · 2,000,000 cr</option><option value="hard">Hard · 1,250,000 cr</option></select></label>
-      <button class="buy" type="submit">Create new game</button>
+      <label>Difficulty<select id="gameDifficulty"><option value="relaxed">Relaxed</option><option value="standard" selected>Standard</option><option value="hard">Hard</option></select></label>
+      </div>
+      <button class="buy" type="submit">New game</button>
     </form>
     <div class="startActions"><button id="continueGame" hidden>Continue</button><button id="startHelp">Instructions</button></div>
     <p id="startMessage" role="status" hidden></p>
@@ -2645,8 +2647,7 @@ function sceneTarget(){
     return [pose.x,pose.y,pose.z+.17];
   }
   if(showcase&&trial){
-    const [x,y,z]=focusTrial('region');
-    return [x+Math.sin(trainTime*.07)*16,y+Math.cos(trainTime*.06)*12,z];
+    return [-33+Math.sin(trainTime*.075)*6,-42+Math.cos(trainTime*.06)*3,.2];
   }
   return trial?focusTrial(focus):keypoints[focus];
 }
@@ -2658,7 +2659,8 @@ function draw(now){
   if(!showcase&&playing&&prevTime&&!document.hidden&&$('roadBuilder').hidden&&!$('townEditor').open){const dt=Math.min(.5,(now-prevTime)/1000);trainTime+=dt;if(trial?.truckRuns.length||trial?.market.localRoutes.length)trial.market.step(dt*speed);}
   prevTime=now;
   const a=Math.cos(camera.yaw),b=Math.sin(camera.yaw),k=Math.sin(camera.pitch),l=Math.cos(camera.pitch);
-  const scale=baseScale()*camera.zoom,target=sceneTarget();
+  const scale=showcase&&trial?Math.max(width/58,height/24):baseScale()*camera.zoom;
+  const target=sceneTarget();
   project=([px,py,pz])=>{
     const x=px-target[0],y=py-target[1],z=pz-target[2], y2=x*b+y*a;
     return [width*.5+camera.x+(x*a-y*b)*scale,height*.51+camera.y+(y2*k-z*l)*scale,y2*l+z*k];
@@ -3416,7 +3418,7 @@ try{preference=localStorage.getItem('contour-lines-diorama-look');}catch{}
 let showcase=true;
 function showcaseTransport(valley){
   const pairs=valley.towns.flatMap((town,i)=>valley.towns.slice(i+1).map(other=>[town,other]));
-  const routes=pairs.filter(([a,b])=>Math.hypot(a.x-b.x,a.y-b.y)<58).map(([a,b],index)=>{
+  const routes=pairs.filter(([a,b])=>Math.hypot(a.x-b.x,a.y-b.y)<105).map(([a,b],index)=>{
     const dx=b.x-a.x,dy=b.y-a.y,length=Math.hypot(dx,dy);
     const samples=Math.ceil(length*2);
     const path=Array.from({length:samples+1},(_,i)=>{
@@ -3427,7 +3429,7 @@ function showcaseTransport(valley){
     });
     const station=(town,point,n)=>({...point,nx:n*dx/length,ny:n*dy/length,place:town.id,name:town.name});
     return {points:path,stations:[station(a,path[0],1),station(b,path.at(-1),-1)],
-      service:{vehicles:Array.from({length:6},(_,i)=>({phase:4+i*length*.35+index*2,load:0}))}};
+      service:{vehicles:Array.from({length:10},(_,i)=>({phase:4+i*length*.29+index*2,load:0}))}};
   });
   return {routes,removedRoads:[],removedLots:[],year:4};
 }
