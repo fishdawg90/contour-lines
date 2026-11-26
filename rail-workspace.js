@@ -242,10 +242,10 @@ window.createRailWorkspace=function({getValley,designSection,savePath,buildTrack
         }
       }
     }
-    const ready=tool==='path'?path.length&&endpoint()===route()?.stations[1].id&&!draftRun?.laneConflict:tool==='draw'?section&&!section.issue:picks.length===2;
+    const ready=tool==='path'?path.length&&endpoint()===route()?.stations[1].id&&!draftRun?.laneConflict&&!draftRun?.platformConflict:tool==='draw'?section&&!section.issue:picks.length===2;
     button('apply').disabled=!ready;
     button('apply').textContent=tool==='path'?'Save path':tool==='draw'?'Build connection':'Remove section';
-    q('[role=status]').textContent=message||(tool==='path'?(draftRun?.laneConflict?'The selected connections use opposite rails. Choose a different path or platform.':'Tap a platform or a numbered double-track section. L or R selects the same rail across connected sections.'):
+    q('[role=status]').textContent=message||(tool==='path'?(draftRun?.platformConflict?'Choose track connected to the assigned platform.':draftRun?.laneConflict?'The selected connections use opposite rails. Choose a different path or platform.':'Tap a platform or a numbered double-track section. L or R selects the same rail across connected sections.'):
       tool==='draw'?(picks.length<2?'Tap entry and exit on existing track.':'Tap to add bends to the green connection.'):
       'Tap two points on the same track to mark a short section. Reroute services using it before removal.');
     if(tool==='draw'&&section)q('[role=status]').textContent=message||section.issue||Math.round(section.length*40)+' m · '+ContourRail.connectionCost(section,valley().region==='mixed').toLocaleString()+' cr';

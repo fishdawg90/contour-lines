@@ -85,7 +85,7 @@ function townWeeklyDemand(town,cargo,level,homeCount,reachableHomes=homeCount){
 }
 function timberStorageCapacity(town,level,homeCount){
   // Keep room for vehicle-sized deliveries as households use less timber.
-  return 2*fullTownDemand(town,'timber',level,homeCount);
+  return 4*fullTownDemand(town,'timber',level,homeCount);
 }
 function trades(a,b,{allowFormerDemand=false}={}){
   if(!a||!b||a.id===b.id)return [];

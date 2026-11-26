@@ -43,10 +43,10 @@ canvas:active{cursor:grabbing}
 .info strong{color:var(--ink)}
 @media(max-width:400px){.controls{bottom:calc(var(--control-bottom) + 51px)}}
 </style>
-<link rel="stylesheet" href="./road-builder.css?v=0.1.9">
-<link rel="stylesheet" href="./rail-builder.css?v=0.1.9">
-<link rel="stylesheet" href="./rail-workspace.css?v=0.1.9">
-<link rel="stylesheet" href="./network.css?v=0.1.9">
+<link rel="stylesheet" href="./road-builder.css?v=0.1.10">
+<link rel="stylesheet" href="./rail-builder.css?v=0.1.10">
+<link rel="stylesheet" href="./rail-workspace.css?v=0.1.10">
+<link rel="stylesheet" href="./network.css?v=0.1.10">
 </head>
 <body>
 <div id="app">
@@ -56,7 +56,7 @@ canvas:active{cursor:grabbing}
 <canvas id="gpu" aria-hidden="true" hidden></canvas>
 <canvas id="scene" tabindex="0" aria-label="Three-dimensional valley. Pan with one finger, pinch with two, or rotate with three. Arrow keys rotate and tilt."></canvas>
 <div class="caption"><h2 id="look">Diorama studio</h2><p id="description">Loading the scene…</p></div>
-<button id="brand" aria-label="Company finances" aria-describedby="appVersion"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M2 17c4 0 3-11 9-11s6 8 11 5M2 21c6 0 5-11 10-11s6 7 10 5M4 11c2-5 4-9 9-9s6 6 9 5"/></svg><div><b>POCKET LOGISTICS</b><small id="cash">Road network</small><span id="appVersion">v0.1.9</span></div></button>
+<button id="brand" aria-label="Company finances" aria-describedby="appVersion"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M2 17c4 0 3-11 9-11s6 8 11 5M2 21c6 0 5-11 10-11s6 7 10 5M4 11c2-5 4-9 9-9s6 6 9 5"/></svg><div><b>POCKET LOGISTICS</b><small id="cash">Road network</small><span id="appVersion">v0.1.10</span></div></button>
 <div id="timeControls"><time id="calendar"></time><button id="speed" aria-label="Game speed" title="Change game speed">1×</button><div id="mapToggles">
 <button id="toggleRoutes" aria-label="Routes and vehicles" aria-pressed="true" title="Routes and vehicles"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18h9a4 4 0 0 0 0-8H9a2 2 0 0 1 0-4h8"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/></svg></button>
 <button id="toggleLabels" aria-label="Map labels" aria-pressed="true" title="Map labels"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11h-7l-4 3v-3H4zM8 9h8m-8 3h5"/></svg></button>
@@ -196,7 +196,7 @@ canvas:active{cursor:grabbing}
     <div class="editorCrossings" id="teCrossings" hidden></div>
     <div class="teActions"><button id="teUndo">Undo point</button><button id="teConfirm" class="buy">Build</button></div></div>
 </dialog>
-<script src="./demolition.js?v=0.1.9"></script><script src="./grade-separation.js?v=0.1.9"></script><script src="./town-network.js?v=0.1.9"></script><script src="./town-editor.js?v=0.1.9"></script><script src="./valley-assets.js?v=0.1.9"></script><script src="./biome-assets.js?v=0.1.9"></script><script src="./region.js?v=0.1.9"></script><script src="./freight.js?v=0.1.9"></script><script src="./rail-sim.js?v=0.1.9"></script><script src="./rail-assets.js?v=0.1.9"></script><script src="./crossings.js?v=0.1.9"></script><script src="./economy.js?v=0.1.9"></script><script src="./finance-charts.js?v=0.1.9"></script><script src="./route-overlay.js?v=0.1.9"></script><script src="./hud.js?v=0.1.9"></script><script src="./network-ui.js?v=0.1.9"></script><script src="./road-builder.js?v=0.1.9"></script><script src="./rail-builder.js?v=0.1.9"></script><script src="./rail-workspace.js?v=0.1.9"></script>
+<script src="./demolition.js?v=0.1.10"></script><script src="./grade-separation.js?v=0.1.10"></script><script src="./town-network.js?v=0.1.10"></script><script src="./town-editor.js?v=0.1.10"></script><script src="./valley-assets.js?v=0.1.10"></script><script src="./biome-assets.js?v=0.1.10"></script><script src="./region.js?v=0.1.10"></script><script src="./freight.js?v=0.1.10"></script><script src="./rail-sim.js?v=0.1.10"></script><script src="./rail-assets.js?v=0.1.10"></script><script src="./crossings.js?v=0.1.10"></script><script src="./economy.js?v=0.1.10"></script><script src="./finance-charts.js?v=0.1.10"></script><script src="./route-overlay.js?v=0.1.10"></script><script src="./hud.js?v=0.1.10"></script><script src="./network-ui.js?v=0.1.10"></script><script src="./road-builder.js?v=0.1.10"></script><script src="./rail-builder.js?v=0.1.10"></script><script src="./rail-workspace.js?v=0.1.10"></script>
 <script>
 (() => {
 'use strict';
@@ -1524,11 +1524,11 @@ function railActors(route,index,run,fleet,scale,actors){
       const yaw=Math.atan2(dy,dx)+(facingArrival?Math.PI:0),pitch=Math.atan2(facingArrival?-dz:dz,Math.hypot(dx,dy));
       const pose={x:(a.x+b.x)/2,y:(a.y+b.y)/2,z:(a.z+b.z)/2+.048};
       const model=ContourRailAssets.vehicle(unit.id,unitLength,unit.kind);
-      actors.push(modelActor(model,pose.x,pose.y,pose.z,yaw,[1,1,1],pitch));
+      actors.push(modelActor(model,pose.x,pose.y,pose.z,yaw,[1,1.23,1.28],pitch));
       if(unit.kind==='freight'&&vehicle.load>0&&scale>=16&&!/box|van|goods|heavy/i.test(unit.id)){
         const cargo=trial.market.routeTrade(route)?.cargo;
         const load=freightLoadModel(cargo),k=unitLength*.21;
-        actors.push(modelActor(load,pose.x,pose.y,pose.z+.062,yaw,[k,k,k],pitch));
+        actors.push(modelActor(load,pose.x,pose.y,pose.z+.078,yaw,[k,k*1.23,k*1.28],pitch));
       }
       if(scale>=12){
         const [x,y]=project([pose.x,pose.y,pose.z+.055]);
@@ -1555,7 +1555,7 @@ function routeActors(scale,actors){
       }
       const pose=truckPose(run,showcase?vehicle.phase+trainTime*4:vehicle.phase);
       if(pose.tunnel||!visibleAsset(pose.x,pose.y,pose.z,16+scale))continue;
-      const k=rig.scale*1.13,body=modelActor(detailed?rig.model:rig.compact,pose.x,pose.y,pose.z,pose.yaw,[k,k,k],pose.pitch);
+      const k=rig.scale*1.34,body=modelActor(detailed?rig.model:rig.compact,pose.x,pose.y,pose.z,pose.yaw,[k,k,k],pose.pitch);
       actors.push(body);
       const transfer=pose.service===null?0:clamp((pose.service-.21)/.66,0,1);
       if(freight&&vehicle.load){
@@ -1594,7 +1594,7 @@ function freightLoadModel(cargo){
 function localActors(scale,actors){
   for(const route of trial.market.localRoutes){
     const rig=route.local==='bus'?gameAssets.bus:gameAssets.truck;
-    const k=rig.scale*1.13;
+    const k=rig.scale*1.34;
     for(const v of trial.market.fleet(route).vehicles){
       if(localStaged(v))continue;
       const p=localPose(route,v);
@@ -1898,12 +1898,18 @@ function applySiteClearance(transport,roads,lots){
   transport.removedRoads=[...new Set([...transport.removedRoads,...roads])];
   transport.removedLots=[...new Set([...transport.removedLots,...lots])];
 }
+function plannedRailIssue(route,tracks){
+  const known={...tracks,...Object.fromEntries((route.trackPaths??[]).map(track=>[track.id,track]))};
+  return ContourRail.routePlatformIssue(route,known);
+}
 function buildTransport(route,roads=[],lots=route.removedLots??[]){
   if(route.capital>trial.market.state.cash)return false;
   if(route.mode==='rail'){
     if(!validPlatforms(route))return 'Review the station platforms before building this route.';
     const split=stageRailSplits(trial.transport,route);
     if(typeof split==='string')return split;
+    const issue=plannedRailIssue(route,split.tracks);
+    if(issue)return issue;
     applyRailSplits(trial.transport,split);
     delete route.trackCuts;
     registerRail(trial.transport,route,true);
@@ -3857,6 +3863,8 @@ function upgradeRailTrack(id){
   const transport=trial.transport,track=transport.railTracks?.[id];
   if(!track)return 'This track is no longer available.';
   if(track.tracks===2)return 'This section already has two tracks.';
+  const platformIssue=ContourRail.doubleTrackIssue(track,transport);
+  if(platformIssue)return platformIssue;
   const radius=ContourRail.runningTrackRadius(ContourRail.horizontalRadius(track.points),2);
   const radiusIssue=ContourRail.horizontalRadiusIssue(radius);
   if(radiusIssue)return radiusIssue;
@@ -3900,6 +3908,8 @@ function updateRailRoute(index,changes){
   if(!validPlatforms(plan))return 'Review the station platforms before saving this route.';
   const split=stageRailSplits(transport,plan);
   if(typeof split==='string')return split;
+  const platformIssue=plannedRailIssue(plan,split.tracks);
+  if(platformIssue)return platformIssue;
   const current=ContourTrackSplit.rewriteRoute(route,split.replacements);
   const changedLanes=JSON.stringify(plan.trackLanes??[])!==JSON.stringify(current.trackLanes??[]);
   if(changedLanes&&activeTrains(route))return 'Hold trains at a station before changing their running tracks.';
@@ -3959,6 +3969,10 @@ function updateRailStation(station,{capital=0,removedRoads=[],removedLots=[],ass
     const route=transport.routes[index];
     if(route?.mode!=='rail'||route.stations[side]?.id!==station.id||
       !Number.isInteger(platform)||platform<1||platform>count)return 'The platform assignment is no longer available.';
+    const plan={...route,platforms:route.platforms?.slice()??[1,1]};
+    plan.platforms[side]=platform;
+    const issue=plannedRailIssue(plan,transport.railTracks);
+    if(issue)return issue;
     if(platform!==(route.platforms?.[side]??1)&&activeTrains(route))return 'Hold the trains at a station before changing their platform.';
   }
   for(const {index,side,platform} of assignments){

@@ -532,6 +532,10 @@ window.ContourEconomy = function(valley) {
       }
     }
   }
+  function advancedGoodsReady(city){
+    const scores=townSatisfaction(city).goods;
+    return Object.entries(scores).some(([cargo,score])=>ContourRegion.goods[cargo]?.[2]===3&&(ratio(score)??0)>.10);
+  }
   function townProgress(city){
     const timber=timberMarket(city),level=state.received[city.id]?.expansion??0;
     const population=homes(city).length*4;
@@ -547,7 +551,8 @@ window.ContourEconomy = function(valley) {
     const strongTrend=Math.ceil(goal*.10);
     const trend=lastMonthGrowth===null?'Pending':lastMonthGrowth>=strongTrend?'Growing fast':
       lastMonthGrowth>0?'Growing':lastMonthGrowth<=-strongTrend?'Declining fast':lastMonthGrowth<0?'Declining':'Stable';
-    return {level,population,goal,points,weeklyDecay,trend,strongTrend,lastMonthGrowth,lowMonths:timber.lowMonths??0,downgradeMonths,naturalGrowth,overdue,queuePenalty,lastQueuePenalty:timber.lastQueuePenalty??0,remaining:goal-points,
+    const growthBlocked=level>=4&&Boolean(valley.region)&&!advancedGoodsReady(city);
+    return {level,population,goal,points,weeklyDecay,trend,growthBlocked,strongTrend,lastMonthGrowth,lowMonths:timber.lowMonths??0,downgradeMonths,naturalGrowth,overdue,queuePenalty,lastQueuePenalty:timber.lastQueuePenalty??0,remaining:goal-points,
       percent:Math.floor(100*points/goal),used:timber.monthUsed,monthlyTimber,
       riders:stop.monthHandled??0,monthlyRiders:(stop.monthDemand??0)+(4-state.week%4)*weeklyVisits(city),
       serviceGrowth:timber.lastServiceGrowth??{goods:0,passengers:0}};
@@ -557,12 +562,12 @@ window.ContourEconomy = function(valley) {
   }
   function weeklyDemand(city){return cargoNeed(city,'timber');}
   function timberBuffer(city){return ContourRegion.timberStorageCapacity(city,state.received[city.id]?.expansion??0,homes(city).length);}
-  function timberForRoute(city,station,travel){
+  function timberForRoute(city,station,travel,reached=catchment(station,city,'delivery').length){
     const market=timberMarket(city);
-    const reached=catchment(station,city,'delivery').length;
     if(!reached||!weeklyDemand(city))return 0;
     // Order ahead for timber already travelling, while limiting physical stock at the town.
-    const target=Math.ceil(cargoNeed(city,'timber',reached)*(1+travel/weekSeconds));
+    const rate=cargoNeed(city,'timber',reached);
+    const target=rate*3+Math.ceil(rate*travel/weekSeconds);
     const yard=timberYard(station,city);
     const yardTarget=yard?Math.floor(target*districtShare(station,city)):0;
     const directTarget=target-yardTarget;
@@ -571,10 +576,13 @@ window.ContourEconomy = function(valley) {
   }
   function timberLoading(route,from,run,load=0,batch=capacity(route)){
     const station=route.stations[1-from],town=source(station);
-    const demand=timberForRoute(town,station,scheduledTravel(route,run));
+    const travel=scheduledTravel(route,run);
+    const reached=catchment(station,town,'delivery').length;
+    const demand=timberForRoute(town,station,travel,reached);
+    const pipeline=Math.ceil(cargoNeed(town,'timber',reached)*travel/weekSeconds);
     const remaining=batch-load;
     const market=timberMarket(town);
-    const room=timberBuffer(town)-market.stock-market.inbound;
+    const room=timberBuffer(town)+pipeline-market.stock-market.inbound;
     const order=isRail(route)?Math.min(demand,Math.max(0,room)):demand;
     // An open order may be rounded up to a whole vehicle if the town can store it.
     const canFill=order>=remaining||((order>0||load>0)&&room>=remaining);
@@ -799,7 +807,9 @@ window.ContourEconomy = function(valley) {
       t.monthGrowth=(t.monthGrowth??0)+balance;
       t.growthWeeks=(t.growthWeeks??0)+1;
       t.growthPoints=Math.max(0,growth.points+balance);
-      const levelledUp=t.growthPoints>=growth.goal;
+      const blocked=growth.level>=4&&Boolean(valley.region)&&!advancedGoodsReady(city);
+      if(blocked)t.growthPoints=Math.min(t.growthPoints,growth.goal);
+      const levelledUp=!blocked&&t.growthPoints>=growth.goal;
       if(levelledUp){
         const received=state.received[city.id]??={timber:0,passengers:0};
         t.growthPoints-=growth.goal;
@@ -1206,8 +1216,34 @@ window.ContourEconomy = function(valley) {
   const localPose=(route,phase)=>roadPose(route.path,phase,'distance',.055);
   const mainPose=(run,from,d)=>roadPose(run.path,from?run.path.at(-1).length-d:d,'length',.073,from===1);
   function townTraffic(services,loops){
-    const occupied=new Map();
-    function place(route,vehicle,pose){occupied.set(vehicle,{route,pose});}
+    const occupied=new Map(),cells=new Map();
+    const cell=(x,y)=>x+','+y;
+    function leave(vehicle){
+      const previous=occupied.get(vehicle);
+      if(!previous)return;
+      const bin=cells.get(previous.key);
+      bin.delete(vehicle);
+      if(!bin.size)cells.delete(previous.key);
+      occupied.delete(vehicle);
+    }
+    function place(route,vehicle,pose){
+      const key=cell(Math.floor(pose.x),Math.floor(pose.y));
+      const previous=occupied.get(vehicle);
+      if(previous?.key===key){previous.pose=pose;return;}
+      leave(vehicle);
+      const entry={route,pose,key};
+      let bin=cells.get(key);
+      if(!bin){bin=new Map();cells.set(key,bin);}
+      bin.set(vehicle,entry);occupied.set(vehicle,entry);
+    }
+    function* nearby(position,range){
+      for(let y=Math.floor(position.y-range);y<=Math.floor(position.y+range);y++){
+        for(let x=Math.floor(position.x-range);x<=Math.floor(position.x+range);x++){
+          const bin=cells.get(cell(x,y));
+          if(bin)yield* bin;
+        }
+      }
+    }
     for(const {route,run,service} of services){
       const half=run.travel+bayTime;
       for(const v of service.vehicles){
@@ -1219,7 +1255,7 @@ window.ContourEconomy = function(valley) {
       if(v.phase>0||v.next)place(route,v,localPose(route,v.phase));
     }
     function canMove(route,vehicle,from,to){
-      for(const [other,{route:otherRoute,pose}] of occupied){
+      for(const [other,{route:otherRoute,pose}] of nearby(from,.8)){
         if(other===vehicle||(!route.local&&route===otherRoute)||Math.abs(pose.z-to.z)>.06)continue;
         const x=pose.x-from.x,y=pose.y-from.y;
         if(Math.abs(x)>.8||Math.abs(y)>.8)continue;
@@ -1241,12 +1277,12 @@ window.ContourEconomy = function(valley) {
       return true;
     }
     function canEnter(vehicle,position){
-      for(const [other,{pose}] of occupied){
+      for(const [other,{pose}] of nearby(position,.25)){
         if(other!==vehicle&&Math.abs(pose.z-position.z)<.06&&distance(pose,position)<.25)return false;
       }
       return true;
     }
-    return {place,canMove,canEnter,leave:vehicle=>occupied.delete(vehicle)};
+    return {place,canMove,canEnter,leave};
   }
   function trafficPass(vehicle,clear,dt,travelled=0){
     if(vehicle.trafficClearance>0){
@@ -1407,19 +1443,24 @@ window.ContourEconomy = function(valley) {
       const yard=timberYard(station,town);
       const staged=yard?Math.max(0,Math.min(timberBuffer(town)-yard.timber,
         Math.floor((yard.splitCredit??0)+vehicle.load*districtShare(station,town)))):0;
-      return vehicle.load<=timberBuffer(town)-timberMarket(town).stock+staged;
+      return vehicle.load<=Math.max(timberBuffer(town),vehicle.load)-timberMarket(town).stock+staged;
     }
     const {limit,stock,inbound}=freight.storage(town,plan.cargo);
     return vehicle.load<=Math.max(limit,stock+inbound)-stock;
   }
+  const railResourceCache=new WeakMap();
   function railResources(entry,from){
     const {route,run}=entry;
+    let cached=railResourceCache.get(run);
+    if(!cached){cached=[];railResourceCache.set(run,cached);}
+    if(cached[from])return cached[from];
     const blocks=rail.blockKeys(run,from).filter(key=>key.startsWith('track:'));
     const ends=route.stations.flatMap((station,side)=>{
       const block=side?run.blocks.at(-1):run.blocks[0];
       const key='station:'+stationKey(station),platform=route.platforms?.[side];
       const profile=block.profile?.[(side===0)===(block.direction===1)?'start':'end'];
       const platformKey=key+'/platform-'+(platform??1);
+      if(rail.platformAt(block.track,station.id))return [platformKey,platformKey+'/out',platformKey+'/in'];
       if(profile){
         const lane=profile.layout.lanes.find(lane=>lane.index===(platform??1));
         const keys=[lane?platformKey:key+'/platform-1'];
@@ -1436,7 +1477,7 @@ window.ContourEconomy = function(valley) {
       if(platform===1||block.tracks===1)return [platformKey+'/out',platformKey+'/in'];
       return [platformKey+(side===from?'/out':'/in')];
     });
-    return [...blocks,...ends];
+    return cached[from]=[...blocks,...ends];
   }
   function advanceRail(entries,dt,crossings){
     const claims=new Map(),staged=[],signals=new Map();
@@ -1528,7 +1569,7 @@ window.ContourEconomy = function(valley) {
       if(!fitsPlatforms(route,quote)){vehicle.waiting='platform';continue;}
       if(!quote.valid||rail.estimate(vehicle.consist,cargo,run).stalled){vehicle.waiting='traction';continue;}
       const keys=railResources(entry,from);
-      if(run.laneConflict||keys.some(key=>claims.has(key))){
+      if(run.laneConflict||run.platformConflict||keys.some(key=>claims.has(key))){
         vehicle.waiting='signal';
         motion.waitAge=(motion.waitAge??0)+dt;
         continue;

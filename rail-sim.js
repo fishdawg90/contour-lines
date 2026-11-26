@@ -61,6 +61,38 @@
       length:sum(stock,'length'),resistance:sum(stock,'resistance'),brake:sum(stock,'brake'),carCount:stock.length};
   }
   const crossingCache=new WeakMap();
+  function platformAt(track,node){
+    return !track?undefined:track.from===node?track.startPlatform:track.to===node?track.endPlatform:undefined;
+  }
+  function platformAccess(track,node,platform,tracks){
+    const dedicated=platformAt(track,node);
+    if(dedicated)return dedicated===platform;
+    return !Object.values(tracks??{}).some(other=>platformAt(other,node)===platform);
+  }
+  function routePlatformIssue(route,tracks){
+    const sections=route.trackIds?.map(id=>tracks[id])??[];
+    const invalid=route.stations?.some((station,i)=>{
+      const track=i===0?sections[0]:sections.at(-1);
+      return track&&!platformAccess(track,station.id,route.platforms?.[i]??1,tracks);
+    });
+    if(invalid)return 'Choose track connected to the assigned platform.';
+    for(let i=1;i<sections.length;i++){
+      const before=sections[i-1],after=sections[i];
+      if(!before||!after)continue;
+      const reverse=route.trackDirections?.[i-1]===-1;
+      const node=reverse?before.from:before.to;
+      const entry=platformAt(before,node),exit=platformAt(after,node);
+      if((entry||exit)&&entry!==exit)return 'The two approaches connect to different platform tracks.';
+    }
+    return '';
+  }
+  function doubleTrackIssue(track,transport){
+    for(const id of [track.from,track.to]){
+      if(Object.values(transport.railTracks??{}).some(other=>platformAt(other,id)))
+        return 'This station has a dedicated platform approach. Use the existing tracks or build a turnout beyond the platform.';
+    }
+    return '';
+  }
   const nodeId=(trackId,index)=>'junction:'+JSON.stringify([trackId,index]);
   function trackTangent(track,i){
     if(i===0&&track.startTangent)return track.startTangent;
@@ -100,7 +132,9 @@
           startTangent:first?trackTangent(track,first):track.startTangent,
           endTangent:last<track.points.length-1?trackTangent(track,last):track.endTangent,
           startJunction:first===0?track.startJunction:undefined,
-          endJunction:last===track.points.length-1?track.endJunction:undefined};
+          endJunction:last===track.points.length-1?track.endJunction:undefined,
+          startPlatform:first===0?track.startPlatform:undefined,
+          endPlatform:last===track.points.length-1?track.endPlatform:undefined};
         if(track.crossings){
           piece.crossings=track.crossings.filter(({d})=>d>=start&&(d<end||i===indices.length-2&&d<=end))
             .map(entry=>{
@@ -271,13 +305,17 @@
     const length=distances.at(-1),tracks=track.tracks===2?2:1;
     const stationAt=(id,first)=>{
       const station=transport?.railStations?.[id];
-      if(!station)return null;
+      if(!station||platformAt(track,id))return null;
       const a=first?points[0]:points.at(-2),b=first?points[1]:points.at(-1);
       const side=station.ny*(b.x-a.x)-station.nx*(b.y-a.y)>=0?1:-1;
       const trackCount=stationTrackCount(station,transport);
       const layout=stationLayout(station,trackCount);
-      const mixed=trackCount===2&&Object.values(transport?.railTracks??{}).some(other=>
-        other.tracks!==2&&(other.from===id||other.to===id));
+      const connected=Object.values(transport?.railTracks??{});
+      const dedicated=new Set(connected.map(other=>platformAt(other,id)).filter(Boolean));
+      layout.platforms=layout.platforms.filter(p=>!dedicated.has(p.index));
+      layout.lanes=layout.lanes.filter(lane=>!dedicated.has(lane.index));
+      const mixed=trackCount===2&&connected.some(other=>
+        other.tracks!==2&&!platformAt(other,id)&&(other.from===id||other.to===id));
       return {side,layout,mixed,station,span:station.terminal?layout.end:(layout.end-layout.start)/2};
     };
     const start=stationAt(track.from,true),end=stationAt(track.to,false);
@@ -305,7 +343,8 @@
       tangents.splice(i,0,{x:(b.x-a.x)/Math.hypot(b.x-a.x,b.y-a.y),y:(b.y-a.y)/Math.hypot(b.x-a.x,b.y-a.y)});
     }
     return {points:samples,distances:sampleDistances,length,tracks,start,end,taperStart:taperStart&&!start,taperEnd:taperEnd&&!end,tangents,
-      startConnection:start?null:branchConnection(track,true,transport),endConnection:end?null:branchConnection(track,false,transport)};
+      startConnection:start||track.startPlatform?null:branchConnection(track,true,transport),
+      endConnection:end||track.endPlatform?null:branchConnection(track,false,transport)};
   }
   function turnoutFlags(track,transport){
     const profile=trackProfile(track,transport);
@@ -447,6 +486,8 @@
         if(connection){block.turnoutLane=laneForConnection(block.track,node,connection);break;}
       }
     });
+    const platformConflict=Boolean(routePlatformIssue(route,{...transport?.railTracks,
+      ...Object.fromEntries(tracks.filter(Boolean).map(track=>[track.id,track]))}));
     const laneConflict=resolveRunningLanes(blocks);
     let blockEnd=0;
     for(const block of blocks){
@@ -475,13 +516,14 @@
     const junctions=new Map();
     for(const track of Object.values(transport?.railTracks??{})){
       for(const end of [track.from,track.to]){
+        if(platformAt(track,end))continue;
         junctions.set(end,(junctions.get(end)??0)+1);
       }
     }
     const singleEnds=new Set(),doubleEnds=new Set();
     for(const track of Object.values(transport?.railTracks??{})){
       const ends=track.tracks===2?doubleEnds:singleEnds;
-      for(const end of [track.from,track.to])if(end!=null)ends.add(end);
+      for(const end of [track.from,track.to])if(end!=null&&!platformAt(track,end))ends.add(end);
     }
     const switches=[...new Set(blocks.flatMap(block=>[block.from,block.to]))]
       .filter(end=>end!=null&&(junctions.get(end)>2||(singleEnds.has(end)&&doubleEnds.has(end))));
@@ -499,7 +541,7 @@
       }
       for(const [node,d] of [[block.direction===1?block.from:block.to,block.start],
         [block.direction===1?block.to:block.from,block.end]]){
-        if(!switches.includes(node))continue;
+        if(!switches.includes(node)||platformAt(block.track,node))continue;
         const through=doubleThrough(node,transport),main=through[0];
         const atStart=block.from===node;
         const connection=atStart?block.profile?.startConnection:block.profile?.endConnection;
@@ -521,7 +563,7 @@
       }
       return zones;
     });
-    const railRun={mode:'rail',path,length:path.at(-1).length,segments,blocks,laneConflict,switches,crossings:crossingsOnRoute,
+    const railRun={mode:'rail',path,length:path.at(-1).length,segments,blocks,laneConflict,platformConflict,switches,crossings:crossingsOnRoute,
       signalZones:signalZonesByDirection[0],signalZonesByDirection};
     const sample=estimate(defaultConsist(route.cargo??'passengers'),route.cargo??'passengers',railRun);
     railRun.travel=Number.isFinite(sample.travel)&&Number.isFinite(sample.returnTravel)?
@@ -765,5 +807,5 @@
     }
     return Math.round((span*40*245+bridges*40*815)*(regional?.25:1));
   }
-  window.ContourRail={minHorizontalRadius,horizontalRadius,horizontalRadiusIssue,runningTrackRadius,preferredRunningTrack,runningTrackChoice,doubleThrough,laneVector,branchConnection,serviceRail,connectionCost,signalWindows,secondTrackCost,locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,runningLane,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trackTangent,trainSpan};
+  window.ContourRail={platformAt,platformAccess,routePlatformIssue,doubleTrackIssue,minHorizontalRadius,horizontalRadius,horizontalRadiusIssue,runningTrackRadius,preferredRunningTrack,runningTrackChoice,doubleThrough,laneVector,branchConnection,serviceRail,connectionCost,signalWindows,secondTrackCost,locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,runningLane,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trackTangent,trainSpan};
 })();

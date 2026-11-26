@@ -736,6 +736,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       meters(meter('Next level',growth.points/growth.goal,{color:'#eac68a'})),townMeter);
     const aboard=trips.filter(item=>item.aboard).map(item=>item.aboard+' to '+hud.short(item.town));
     if(aboard.length)overview.append(node('p','Aboard · '+aboard.join(' · '),'inspectorNotice'));
+    if(growth.growthBlocked)overview.append(node('p','Growth paused. Raise any good unlocked at level 3 above 10% satisfaction.','inspectorNotice warning'));
     if(growth.lowMonths)overview.append(node('p','Downgrade risk · '+growth.lowMonths+' / '+growth.downgradeMonths+' months','inspectorNotice warning'));
     data.append(node('small','Goods satisfaction fades by 10% per week. Passenger satisfaction measures actual trips served. Growth also depends on how many homes your passenger network reaches.'),
       row('Waiting riders',waiting),row('Monthly trend',growth.trend));

@@ -192,11 +192,11 @@ window.createRailBuilder=function({getValley,getMapView,bounds,heightScale,draft
     for(const station of state.stations??[])if(station)nodes.set(station.id,station);
     return nodes;
   }
-  function endpointHeading(from,to,ignored,known,neighbor){
+  function endpointHeading(from,to,ignored,known,neighbor,platform){
     if(from.kind){
       const tangent={x:-from.ny,y:from.nx};
       if(from.terminal&&from.facing)return from.facing;
-      const approaches=incident(from,known).filter(track=>track.id!==ignored);
+      const approaches=platform?[]:incident(from,known).filter(track=>track.id!==ignored&&!ContourRail.platformAt(track,from.id));
       if(approaches.length===1){
         const existing=ends(directed(approaches[0],from.id).points)[0];
         return dot(tangent,existing)>0?{x:-tangent.x,y:-tangent.y}:tangent;
@@ -214,16 +214,36 @@ window.createRailBuilder=function({getValley,getMapView,bounds,heightScale,draft
     }
     return heading(from,to);
   }
-  function align(from,to,edits,excluded,known,previous,next){
+  function dedicatedPlatform(node,edits,known){
+    const saved=ContourRail.platformAt(known[edits.redraw],node.id);
+    if(saved)return saved;
+    const side=state.stations.findIndex(s=>s?.id===node.id);
+    if(side<0)return undefined;
+    const incidentTracks=incident(node,known).filter(track=>track.id!==edits.redraw);
+    if(!incidentTracks.length)return undefined;
+    const platform=assignedPlatform(side);
+    const served=stationServices(node).some(service=>service.platform===platform);
+    const layout=stationTrackCount(node);
+    if(platform>layout&&!served&&!incidentTracks.some(track=>ContourRail.platformAt(track,node.id)===platform))return platform;
+    return undefined;
+  }
+  function platformEnd(node,platform){
+    if(!platform)return node;
+    const layout=ContourRail.stationLayout(node,stationTrackCount(node));
+    const lane=layout.lanes.find(lane=>lane.index===platform);
+    return {...node,...ContourRail.stationPoint(node,0,lane.offset)};
+  }
+  function align(from,to,edits,excluded,known,previous,next,startPlatform,endPlatform){
     const near=edits.handles[0]??to, far=edits.handles.at(-1)??from;
-    const leave=endpointHeading(from,near,edits.redraw,known,previous);
-    const back=endpointHeading(to,far,edits.redraw,known,next);
+    const leave=endpointHeading(from,near,edits.redraw,known,previous,startPlatform);
+    const back=endpointHeading(to,far,edits.redraw,known,next,endPlatform);
     const grade=(node,track)=>{
       if(node.kind||!track)return 0;
       const [a,b]=directed(track,node.id).points;
       return (b.z-a.z)/(distance(a,b)||1);
     };
-    return designSection(from,to,leave,{x:-back.x,y:-back.y},edits,excluded,-grade(from,previous),grade(to,next));
+    return designSection(platformEnd(from,startPlatform),platformEnd(to,endPlatform),
+      leave,{x:-back.x,y:-back.y},edits,excluded,-grade(from,previous),grade(to,next));
   }
   function stationIssue(s,index,approachTracks){
     if(!s)return 'Choose a place and set a rail station on the map.';
@@ -290,8 +310,9 @@ window.createRailBuilder=function({getValley,getMapView,bounds,heightScale,draft
       return 'A service runs through this station. Keep it as a through station.';
     return '';
   }
-  function junctionIssue(node,leave,ignored,known){
-    const approaches=incident(node,known).filter(t=>t.id!==ignored).map(track=>ends(directed(track,node.id).points)[0]);
+  function junctionIssue(node,leave,ignored,known,platform){
+    if(platform)return '';
+    const approaches=incident(node,known).filter(t=>t.id!==ignored&&!ContourRail.platformAt(t,node.id)).map(track=>ends(directed(track,node.id).points)[0]);
     if(!approaches.length)return '';
     if(node.terminal)return 'Reuse the existing approach into this terminal or convert it to a through station.';
     if(node.kind&&approaches.some(dir=>dot(dir,leave)>.42))
@@ -313,13 +334,19 @@ window.createRailBuilder=function({getValley,getMapView,bounds,heightScale,draft
       }
       const stationRun=s=>s.kind?(s.platformLength??2.4)*(s.terminal?1:.5):0;
       if(!existing&&distance(from,to)<stationRun(from)+stationRun(to)+.35){error='Leave room between track connections.';break;}
+      const startPlatform=existing?undefined:dedicatedPlatform(from,draft,known);
+      const endPlatform=existing?undefined:dedicatedPlatform(to,draft,known);
+      if(!existing&&draft.tracks===2&&(startPlatform||endPlatform)){
+        error||='Choose Single track to connect directly to the unused platform.';
+      }
       const section=existing?null:align(from,to,draft,excluded,known,
-        known[state.legs[i-1]?.trackId],known[state.legs[i+1]?.trackId]);
+        known[state.legs[i-1]?.trackId],known[state.legs[i+1]?.trackId],startPlatform,endPlatform);
       const prior=known[draft.redraw];
       const reversed=prior?.to===from.id;
       const track=existing?(draft.double?{...existing,tracks:2}:existing):{
         id:draft.id,from:reversed?to.id:from.id,to:reversed?from.id:to.id,tracks:draft.tracks,
         startJunction:reversed?draft.endJunction:draft.startJunction,endJunction:reversed?draft.startJunction:draft.endJunction,
+        startPlatform:reversed?endPlatform:startPlatform,endPlatform:reversed?startPlatform:endPlatform,
         points:(reversed?[...section.path].reverse():section.path).map(({x,y,z,dx,dy,bridge,tunnel,gradeSeparation,water})=>({
           x,y,z,dx:reversed?-dx:dx,dy:reversed?-dy:dy,bridge,tunnel,gradeSeparation,water
         })),
@@ -333,10 +360,16 @@ window.createRailBuilder=function({getValley,getMapView,bounds,heightScale,draft
       if(previous&&(previous.to!==from.id||from.terminal||dot(ends(previous.points)[1],ends(leg.points)[0])>-.54))
         error ||= from.terminal?'This route cannot run through a terminal station.':'Smooth the connection between track sections.';
       legs.push(leg);
+      for(const [node,side] of [[from,0],[to,1]]){
+        if(node.id===state.stations[side]?.id&&!ContourRail.platformAccess(track,node.id,assignedPlatform(side),known)){
+          error||='This track does not reach Platform '+assignedPlatform(side)+'. Choose its approach or draw new track.';
+        }
+      }
       if(existing){
         const span=length(existing.points);
         reusedLength+=span;
         if(draft.double&&existing.tracks===1){
+          error||=ContourRail.doubleTrackIssue(existing,{railTracks:known});
           const radius=ContourRail.runningTrackRadius(ContourRail.horizontalRadius(existing.points),2);
           minRadius=Math.min(minRadius,radius);
           error ||= ContourRail.horizontalRadiusIssue(radius);
@@ -345,7 +378,7 @@ window.createRailBuilder=function({getValley,getMapView,bounds,heightScale,draft
         continue;
       }
       const [out,incoming]=ends(leg.points);
-      error ||= junctionIssue(from,out,draft.redraw,known)||junctionIssue(to,incoming,draft.redraw,known)||section.issue;
+      error ||= junctionIssue(from,out,draft.redraw,known,startPlatform)||junctionIssue(to,incoming,draft.redraw,known,endPlatform)||section.issue;
       error ||= section.path.some(p=>!within(p))?'Keep the track within the map.':'';
       error ||= places().filter(p=>p.halfWidth&&p.halfDepth).some(p=>section.path.some(q=>
         Math.abs(q.x-p.x)<p.halfWidth+.12&&Math.abs(q.y-p.y)<p.halfDepth+.12))?'Curve the track around the industry buildings.':'';
@@ -386,7 +419,7 @@ window.createRailBuilder=function({getValley,getMapView,bounds,heightScale,draft
   }
   const reusedDraft=({track,from,to,lane})=>({trackId:track.id,from,to,lane});
   function useCorridor(){
-    const found=findCorridor(tracks(),stations(),...state.stations.map(s=>s.id));
+    const found=findStationCorridor();
     if(found.length)change(()=>setLegs(found.map(reusedDraft)));
     else showIssue('No continuous rail corridor connects these stations. Use Reuse track to add a stretch.');
   }
@@ -854,15 +887,22 @@ window.createRailBuilder=function({getValley,getMapView,bounds,heightScale,draft
     save();
     draw();
   }
+  function findStationCorridor(){
+    const known=tracks();
+    const incompatible=new Set(state.stations.flatMap((station,side)=>incident(station,known)
+      .filter(track=>!ContourRail.platformAccess(track,station.id,assignedPlatform(side),known)).map(track=>track.id)));
+    const [from,to]=state.stations.map(station=>station.id);
+    return findCorridor(known,stations(),from,to,new Set(),incompatible);
+  }
   function startAlignment(reuse){
-    const found=reuse?findCorridor(tracks(),stations(),...state.stations.map(s=>s.id)):[];
+    const found=reuse?findStationCorridor():[];
     change(()=>{
       state.trackChoice=false;
       if(found.length)setLegs(found.map(reusedDraft));
       else {
         if(state.legs.every(leg=>leg.trackId))setLegs([]);
         initializeLegs();
-        setTool(Object.keys(tracks()).length?(reuse?'reuse':'tie'):'shape');
+        setTool(reuse&&Object.keys(tracks()).length?'reuse':'shape');
       }
       state.profile=true;
     });
@@ -1128,8 +1168,15 @@ window.createRailBuilder=function({getValley,getMapView,bounds,heightScale,draft
     if(method){
       details.open=false;
       const reuse=button('Use existing track',()=>startAlignment(true));
-      reuse.disabled=!Object.keys(tracks()).length;
-      primary.append(reuse,button('Draw track',()=>startAlignment(false)));
+      const separate=state.stations.some(s=>dedicatedPlatform(s,{},tracks()));
+      reuse.disabled=separate||!Object.keys(tracks()).length;
+      primary.append(reuse,button(separate?'Connect to unused platform':'Draw track',()=>{
+        if(separate){
+          state.legTracks=1;
+          for(const leg of state.legs)if(!leg.trackId)leg.tracks=1;
+        }
+        startAlignment(false);
+      }));
     }else if(running){
       if(state.legs.length>1)primary.append(sectionPicker());
       if(state.review&&current()&&(current().double||(knownTracks()[current().trackId]?.tracks??current().tracks)===2)){
@@ -1220,6 +1267,7 @@ window.createRailBuilder=function({getValley,getMapView,bounds,heightScale,draft
     }
     const insufficient=capital>getValley().market.state.cash;
     const warning=choosing||method?'':stationEdit?stationEditIssue():running?preview.error||(!service?'These places have no compatible service.':'')||
+      (reviewRun?.platformConflict?'Choose track connected to the assigned platform.':'')||
       (reviewRun?.laneConflict?'The selected connections use opposite rails. Choose a different path or platform.':'')||
       (state.review&&insufficient?'Not enough funds to build. Save this draft and finish later.':''):stationIssue(activeStation(),state.step);
     const instruction=choosing?(state.places[1]?'Continue to place the two stations.':state.places[0]?'Choose a destination on the map or below.':'Choose a departure town or industry on the map or below.'):

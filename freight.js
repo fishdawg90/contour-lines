@@ -23,16 +23,19 @@ window.ContourFreight=function({state,industries,homes,level,weekSeconds}){
       return {stock:site.inputs[cargo]??0,inbound:site.inbound[cargo]??0,limit:to.limit};
     }
     if(to.output){
-      const site=siteStock(to),limit=to.limit*to.inputs[cargo]*3;
+      const site=siteStock(to),limit=to.limit*to.inputs[cargo]*6;
       return {stock:site.inputs[cargo]??0,inbound:site.inbound[cargo]??0,limit};
     }
     const town=townStock(to,cargo);
-    return {stock:town.stock,inbound:town.inbound,limit:weeklyDemand(to,cargo)*3};
+    return {stock:town.stock,inbound:town.inbound,limit:weeklyDemand(to,cargo)*5};
   }
   function orders(to,cargo,travel,reachableHomes){
     const {limit,stock,inbound}=storage(to,cargo);
-    const target=to.output||to.depot?limit:Math.min(limit,Math.ceil(weeklyDemand(to,cargo,reachableHomes)*(1+travel/weekSeconds)));
-    return {order:Math.max(0,target-stock-inbound),room:Math.max(0,limit-stock-inbound)};
+    const rate=to.depot?0:to.output?to.limit*(to.inputs[cargo]??0):weeklyDemand(to,cargo,reachableHomes);
+    const pipeline=Math.ceil(rate*Math.max(0,travel)/weekSeconds);
+    const target=to.output||to.depot?limit:Math.min(limit,rate*3);
+    return {order:Math.max(0,target+pipeline-stock-inbound),
+      room:Math.max(0,limit+pipeline-stock-inbound)};
   }
   function take(from,cargo,count){
     if(!count)return;
