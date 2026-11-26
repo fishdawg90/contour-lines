@@ -4,6 +4,7 @@ window.ContourEconomy = function(valley) {
   const data=valley.transport;
   const startingCash={relaxed:3000000,standard:2000000,hard:1250000};
   const state=data.market??={cash:startingCash[data.difficulty]??startingCash.standard,stock:0,orders:{},received:{}};
+  if(valley.unlimitedFunds)state.cash=Number.MAX_SAFE_INTEGER;
   const radius=7, fare=480, vehiclePrice=6000, stockLimit=96, weekSeconds=15;
   const millUpgradeDemand=60;
   const runningCostMultiplier=1.5,roadTravelRate=.60,maxQuickBonus=.40;
@@ -611,7 +612,7 @@ window.ContourEconomy = function(valley) {
   }
   function book(kind,amount){
     state.finance.current[kind]+=amount;
-    state.cash+=kind==='revenue'?amount:-amount;
+    if(!valley.unlimitedFunds)state.cash+=kind==='revenue'?amount:-amount;
   }
   function bookRoute(service,kind,amount){
     service[kind]+=amount;
@@ -1123,7 +1124,8 @@ window.ContourEconomy = function(valley) {
         const cycle=timed.travel+timed.returnTravel+2*bayTime;
         return total+4*weekSeconds*timed.capacity*(isFreight(route)?1:2)/cycle;
       },0);
-      const lanes=run?.blocks.length&&run.blocks.every(block=>block.tracks===2)&&!['left','right'].includes(route.runningTrack)&&!run.switches.length&&!run.crossings.length?2:1;
+      const lanes=run?.blocks.length&&run.blocks.every(block=>block.tracks===2&&rail.runningLane(block,0)!==rail.runningLane(block,1))&&
+        !run.switches.length&&!run.crossings.length?2:1;
       return {actual,potential:potential*Math.min(1,lanes/Math.max(1,cycles.length))};
     }
     const run=valley.truckRuns?.[index];
@@ -1427,7 +1429,7 @@ window.ContourEconomy = function(valley) {
       const motion=railState(vehicle);
       if(!motion.active){motion.signals=[];continue;}
       const length=railQuote(route,vehicle).length;
-      const front=Math.max(motion.distance,Math.min(length+1,run.length*40-1));
+      const front=rail.trainSpan(run,vehicle,length/rail.metresPerUnit).front*rail.metresPerUnit;
       const held=new Set(motion.signals??[]);
       motion.signals=rail.signalWindows(run,motion.from).filter(zone=>
         front-length<=zone.end&&(held.has(zone.key)||front>=zone.start&&front-length<=zone.end))
@@ -1510,7 +1512,7 @@ window.ContourEconomy = function(valley) {
       if(!fitsPlatforms(route,quote)){vehicle.waiting='platform';continue;}
       if(!quote.valid||rail.estimate(vehicle.consist,cargo,run).stalled){vehicle.waiting='traction';continue;}
       const keys=railResources(entry,from);
-      if(keys.some(key=>claims.has(key))){
+      if(run.laneConflict||keys.some(key=>claims.has(key))){
         vehicle.waiting='signal';
         motion.waitAge=(motion.waitAge??0)+dt;
         continue;

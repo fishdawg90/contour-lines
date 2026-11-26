@@ -1059,7 +1059,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
   function render(){
     const v=getValley();if(!v)return;
     const m=v.market,rs=[...v.transport.routes,...m.localRoutes];
-    el('cash').textContent=cash(m.state.cash);clock();
+    el('cash').textContent=v.unlimitedFunds?'Unlimited funds':cash(m.state.cash);clock();
     if(overlay==='service:timber'&&v.region)overlay='service:starter';
     if(overlay==='service:starter'&&!v.region)overlay='service:timber';
     const serviceLegend=el('serviceLegend'),service=overlay.split(':')[1];
@@ -1252,7 +1252,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
   window.addEventListener('popstate',()=>{if(view)open('',true);});
   function tick(){
     const valley=getValley();if(!valley)return;
-    el('cash').textContent=cash(valley.market.state.cash);
+    el('cash').textContent=valley.unlimitedFunds?'Unlimited funds':cash(valley.market.state.cash);
     if(inspectors.has(view)||view==='stop'){
       const editor=body.querySelector('.railConsist');
       const anchor=editor?.getBoundingClientRect().top;

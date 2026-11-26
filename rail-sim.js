@@ -1,6 +1,31 @@
 (() => {
   'use strict';
   const metresPerUnit=40,gravity=9.81,timeScale=2.6,laneOffset=.13,turnoutLength=.65;
+  const minHorizontalRadius=300;
+  function horizontalRadiusIssue(radius){
+    if(radius>=minHorizontalRadius-1e-6)return '';
+    const measured=radius<1?'under 1 m':Math.floor(radius)+' m';
+    return 'Tightest horizontal curve is '+measured+' (minimum '+minHorizontalRadius+' m). Spread out bends or realign the approach.';
+  }
+  function runningTrackRadius(radius,tracks){
+    return tracks===2?Math.max(0,radius-laneOffset*metresPerUnit):radius;
+  }
+  function horizontalRadius(points){
+    let radius=Infinity,left=0,right=1;
+    for(let i=1;i<points.length-1;i++){
+      const b=points[i];
+      // Ignore short subdivisions introduced by crossings when estimating an existing alignment.
+      while(left+1<i&&Math.hypot(b.x-points[left+1].x,b.y-points[left+1].y)>=.10)left++;
+      right=Math.max(right,i+1);
+      while(right+1<points.length&&Math.hypot(points[right].x-b.x,points[right].y-b.y)<.10)right++;
+      const a=points[left],c=points[right],ux=b.x-a.x,uy=b.y-a.y,vx=c.x-b.x,vy=c.y-b.y;
+      const cross=Math.abs(ux*vy-uy*vx),span=Math.hypot(ux,uy)*Math.hypot(vx,vy);
+      if(span<1e-10)continue;
+      if(cross>1e-10)radius=Math.min(radius,metresPerUnit*span*Math.hypot(c.x-a.x,c.y-a.y)/(2*cross));
+      else if(ux*vx+uy*vy<0)return 0;
+    }
+    return radius;
+  }
   const locomotives={
     shunter:{name:'Yard diesel',price:12800,mass:44,length:10,speed:64,power:430,tractiveEffort:112,resistance:1.7,brake:43},
     diesel:{name:'Road diesel',price:21400,mass:72,length:15,speed:105,power:1150,tractiveEffort:184,resistance:2.1,brake:66},
@@ -73,7 +98,9 @@
         const piece={...track,id:pieceId,from:nodes[i],to:nodes[i+1],points:track.points.slice(first,last+1),
           crossingCorridor:track.crossingCorridor??id,
           startTangent:first?trackTangent(track,first):track.startTangent,
-          endTangent:last<track.points.length-1?trackTangent(track,last):track.endTangent};
+          endTangent:last<track.points.length-1?trackTangent(track,last):track.endTangent,
+          startJunction:first===0?track.startJunction:undefined,
+          endJunction:last===track.points.length-1?track.endJunction:undefined};
         if(track.crossings){
           piece.crossings=track.crossings.filter(({d})=>d>=start&&(d<end||i===indices.length-2&&d<=end))
             .map(entry=>{
@@ -153,6 +180,9 @@
       const low=Math.max(0,Math.min(start,end)),high=Math.min(1,Math.max(start,end));
       if(high-low<1e-5)return false;
       const t=(low+high)/2,f=(t-start)/(end-start);
+      const shared=[first.from,first.to].find(node=>node===second.from||node===second.to);
+      const endpoint=shared===first.from?first.points[0]:first.points.at(-1);
+      if(shared&&Math.hypot(a.x+ux*t-endpoint.x,a.y+uy*t-endpoint.y)<turnoutLength)return false;
       return Math.abs(a.z+(b.z-a.z)*t-c.z-(d.z-c.z)*f)<.18;
     }
     const t=(x*vy-y*vx)/cross,f=(x*uy-y*ux)/cross;
@@ -162,16 +192,39 @@
     const endpoint=shared===first.from?first.points[0]:first.points.at(-1);
     return Math.hypot(a.x+ux*t-endpoint.x,a.y+uy*t-endpoint.y)>.13;
   }
+  function doubleThrough(node,transport){
+    const arms=Object.values(transport?.railTracks??{}).filter(track=>track.tracks===2&&(track.from===node||track.to===node));
+    const outward=arms.map(track=>{
+      const start=track.from===node;
+      const t=trackTangent(track,start?0:track.points.length-1);
+      return start?t:{x:-t.x,y:-t.y};
+    });
+    return arms.filter((_,i)=>outward.some((v,j)=>j!==i&&v.x*outward[i].x+v.y*outward[i].y<-.9));
+  }
+  function laneVector(track,node,lane){
+    const t=trackTangent(track,node===track.from?0:track.points.length-1);
+    return {x:-t.y*lane*laneOffset,y:t.x*lane*laneOffset};
+  }
+  function branchConnection(track,start,transport){
+    if(track.tracks===2)return null;
+    const node=start?track.from:track.to;
+    const main=doubleThrough(node,transport)[0];
+    if(!main)return null;
+    const chosen=start?track.startJunction:track.endJunction;
+    if(chosen)return chosen;
+    // Older branches have no explicit turnout. Use the rail nearest the approach.
+    const points=start?track.points:track.points.slice().reverse(),first=points[0];
+    const approach=points.find(p=>Math.hypot(p.x-first.x,p.y-first.y)>.4)??points.at(-1);
+    const offset=laneVector(main,node,1);
+    const side=(approach.x-first.x)*offset.x+(approach.y-first.y)*offset.y>=0?1:-1;
+    return laneVector(main,node,side);
+  }
   function junctionTapers(track,transport){
     if(track?.tracks!==2)return {taperStart:false,taperEnd:false};
-    let taperStart=false,taperEnd=false;
-    for(const other of Object.values(transport?.railTracks??{})){
-      if(other.id===track.id||other.tracks===2)continue;
-      taperStart||=track.from!=null&&(other.from===track.from||other.to===track.from);
-      taperEnd||=track.to!=null&&(other.from===track.to||other.to===track.to);
-      if(taperStart&&taperEnd)break;
-    }
-    return {taperStart,taperEnd};
+    const adjacent=Object.values(transport?.railTracks??{}).filter(other=>other.id!==track.id&&other.tracks!==2);
+    const tapers=node=>!doubleThrough(node,transport).some(main=>main.id===track.id)&&
+      node!=null&&adjacent.some(other=>other.from===node||other.to===node);
+    return {taperStart:tapers(track.from),taperEnd:tapers(track.to)};
   }
   function taperFactor(distance,length,taperStart,taperEnd){
     const clearance=Math.min(1,taperStart?distance/turnoutLength:1,taperEnd?(length-distance)/turnoutLength:1);
@@ -225,7 +278,7 @@
       const layout=stationLayout(station,trackCount);
       const mixed=trackCount===2&&Object.values(transport?.railTracks??{}).some(other=>
         other.tracks!==2&&(other.from===id||other.to===id));
-      return {side,layout,mixed,span:station.terminal?layout.end:(layout.end-layout.start)/2};
+      return {side,layout,mixed,station,span:station.terminal?layout.end:(layout.end-layout.start)/2};
     };
     const start=stationAt(track.from,true),end=stationAt(track.to,false);
     const {taperStart,taperEnd}=junctionTapers(track,transport);
@@ -237,13 +290,27 @@
     for(const station of [start,end])if(station){
       station.span*=scale;
       station.turnout=turnout;
+      station.shortApproach=turnout<turnoutLength;
     }
-    return {points,distances,length,tracks,start,end,taperStart:taperStart&&!start,taperEnd:taperEnd&&!end};
+    const samples=[...points],sampleDistances=[...distances],tangents=points.map((_,i)=>trackTangent(track,i));
+    const edges=[...(start?[start.span,start.span+start.turnout]:[]),
+      ...(end?[length-end.span-end.turnout,length-end.span]:[])].sort((a,b)=>a-b);
+    // Sample the edge itself so a segment spanning it cannot angle into the platform.
+    for(const distance of edges){
+      const i=sampleDistances.findIndex(d=>d>distance);
+      if(i<1||distance-sampleDistances[i-1]<1e-6||sampleDistances[i]-distance<1e-6)continue;
+      const a=samples[i-1],b=samples[i],t=(distance-sampleDistances[i-1])/(sampleDistances[i]-sampleDistances[i-1]);
+      samples.splice(i,0,{...(t<.5?a:b),x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t,z:a.z+(b.z-a.z)*t});
+      sampleDistances.splice(i,0,distance);
+      tangents.splice(i,0,{x:(b.x-a.x)/Math.hypot(b.x-a.x,b.y-a.y),y:(b.y-a.y)/Math.hypot(b.x-a.x,b.y-a.y)});
+    }
+    return {points:samples,distances:sampleDistances,length,tracks,start,end,taperStart:taperStart&&!start,taperEnd:taperEnd&&!end,tangents,
+      startConnection:start?null:branchConnection(track,true,transport),endConnection:end?null:branchConnection(track,false,transport)};
   }
   function turnoutFlags(track,transport){
-    const flags=junctionTapers(track,transport);
-    if(!transport?.railStations?.[track?.from]&&!transport?.railStations?.[track?.to])return flags;
-    return {...flags,stationProfile:trackProfile(track,transport)};
+    const profile=trackProfile(track,transport);
+    return {taperStart:profile?.taperStart,taperEnd:profile?.taperEnd,
+      stationProfile:profile?.start||profile?.end||profile?.startConnection||profile?.endConnection?profile:null};
   }
   function laneAt(station,main,platform){
     const lanes=station.layout.lanes;
@@ -268,18 +335,38 @@
     }
     return baseline;
   }
+  function railPoint(profile,i,lane,startPlatform,endPlatform){
+    const p=profile.points[i],d=profile.distances[i],t=profile.tangents[i];
+    const offset=trackLateral(profile,d,lane,startPlatform,endPlatform);
+    if(profile.start&&!profile.start.shortApproach&&d<=profile.start.span){
+      const {station,side}=profile.start;
+      return {...p,...stationPoint(station,-d*side,offset*side,p.z)};
+    }
+    const remaining=profile.length-d;
+    if(profile.end&&!profile.end.shortApproach&&remaining<=profile.end.span){
+      const {station,side}=profile.end;
+      return {...p,...stationPoint(station,remaining*side,offset*side,p.z)};
+    }
+    const start=1-taperFactor(d,profile.length,true,false),end=1-taperFactor(d,profile.length,false,true);
+    return {...p,x:p.x-t.y*offset+(profile.startConnection?.x??0)*start+(profile.endConnection?.x??0)*end,
+      y:p.y+t.x*offset+(profile.startConnection?.y??0)*start+(profile.endConnection?.y??0)*end};
+  }
+  function laneForConnection(track,node,connection){
+    const right=laneVector(track,node,1);
+    return right.x*connection.x+right.y*connection.y>=0?1:-1;
+  }
+  function serviceRail(block,from){
+    if(!block.profile)return [];
+    block.serviceRails??=[];
+    return block.serviceRails[from]??=block.profile.points.map((_,i)=>
+      railPoint(block.profile,i,runningLane(block,from),block.startPlatform,block.endPlatform));
+  }
   function trackLines(track,transport,profile=trackProfile(track,transport)){
     if(!profile||profile.points.length<2)return {lines:[],profile};
     const {points,distances,length}=profile;
     const lanes=profile.tracks===2?[-1,1]:[0];
-    const tangents=points.map((_,i)=>trackTangent(track,i));
     const line=(lane,start,end,from=0,to=length)=>({
-      points:points.flatMap((p,i)=>{
-        const d=distances[i];
-        if(d<from||d>to)return [];
-        const offset=trackLateral(profile,d,lane,start,end);
-        return [{...p,x:p.x-tangents[i].y*offset,y:p.y+tangents[i].x*offset}];
-      }),
+      points:points.flatMap((_,i)=>distances[i]<from||distances[i]>to?[]:[railPoint(profile,i,lane,start,end)]),
     });
     const lines=lanes.map(lane=>line(lane));
     for(const [station,first] of [[profile.start,true],[profile.end,false]]){
@@ -290,10 +377,12 @@
         const to=laneAt(station,0,platform.index);
         for(const lane of lanes){
           if(Math.abs(laneAt(station,lane*laneOffset)-to)<1e-6)continue;
+          if(station.shortApproach&&profile.tracks===2&&Math.abs(Math.abs(to)-laneOffset)<1e-6)continue;
           const inner=station.span-.12;
           lines.push(line(lane,first?platform.index:null,first?null:platform.index,
             first?(built.has(to)?Math.max(0,inner):0):Math.max(0,length-limit),
             first?Math.min(length,limit):(built.has(to)?Math.min(length,length-inner):length)));
+          lines.at(-1).railOnly=built.has(to);
           built.add(to);
         }
       }
@@ -344,10 +433,21 @@
         const station=node===track?.from?profile?.start:profile?.end;
         return station?.mixed?1:undefined;
       }
-      return {id,runningTrack:route.trackLanes?.[i]??route.runningTrack,tracks:track?.tracks===2?2:1,direction,length,from:track?.from,to:track?.to,profile,
+      return {id,track,runningTrack:route.trackLanes?.[i]??route.runningTrack,tracks:track?.tracks===2?2:1,direction,length,from:track?.from,to:track?.to,profile,
         startPlatform:assigned(track?.from),endPlatform:assigned(track?.to)};
     });
     if(!blocks.length)blocks.push({id:'route:'+JSON.stringify(route.stations?.map(s=>s.id??[s.x,s.y])),tracks:1,direction:1,length:path.at(-1).length});
+    blocks.forEach((block,index)=>{
+      if(block.tracks!==2)return;
+      for(const [adjacentIndex,node] of [[index-1,block.direction===1?block.from:block.to],
+        [index+1,block.direction===1?block.to:block.from]]){
+        const neighbor=blocks[adjacentIndex];
+        if(neighbor?.tracks!==1||!neighbor.profile)continue;
+        const connection=neighbor.from===node?neighbor.profile.startConnection:neighbor.profile.endConnection;
+        if(connection){block.turnoutLane=laneForConnection(block.track,node,connection);break;}
+      }
+    });
+    const laneConflict=resolveRunningLanes(blocks);
     let blockEnd=0;
     for(const block of blocks){
       block.start=blockEnd;
@@ -387,7 +487,7 @@
       .filter(end=>end!=null&&(junctions.get(end)>2||(singleEnds.has(end)&&doubleEnds.has(end))));
     const crossings=crossingResources(transport);
     const crossingsOnRoute=[...new Set(blocks.flatMap(block=>[...(crossings.get(block.id)??[])]))];
-    const signalZones=[];
+    const signalZones=[],junctionZones=[];
     const locations=crossingCache.get(transport)?.positions??new Map();
     for(const block of blocks){
       for(const key of crossings.get(block.id)??[]){
@@ -399,11 +499,30 @@
       }
       for(const [node,d] of [[block.direction===1?block.from:block.to,block.start],
         [block.direction===1?block.to:block.from,block.end]]){
-        if(switches.includes(node))signalZones.push({key:'junction:'+node,start:Math.max(0,(d-1)*metresPerUnit),
-          end:Math.min(path.at(-1).length*metresPerUnit,(d+1)*metresPerUnit)});
+        if(!switches.includes(node))continue;
+        const through=doubleThrough(node,transport),main=through[0];
+        const atStart=block.from===node;
+        const connection=atStart?block.profile?.startConnection:block.profile?.endConnection;
+        const station=atStart?block.profile?.start:block.profile?.end;
+        const separated=!station&&(connection||through.some(track=>track.id===block.id));
+        junctionZones.push({block,node,main,connection,separated,
+          start:Math.max(0,(d-1)*metresPerUnit),end:Math.min(path.at(-1).length*metresPerUnit,(d+1)*metresPerUnit)});
       }
     }
-    const railRun={mode:'rail',path,length:path.at(-1).length,segments,blocks,switches,crossings:crossingsOnRoute,signalZones};
+    const signalZonesByDirection=[0,1].map(from=>{
+      const zones=[...signalZones];
+      for(const {block,node,main,connection,separated,start,end} of junctionZones){
+        const offset=connection??(separated&&laneVector(block.track,node,runningLane(block,from)));
+        const suffixes=!main?['']:separated?['/'+laneForConnection(main,node,offset)]:['/-1','/1'];
+        for(const suffix of suffixes){
+          const key='junction:'+node+suffix;
+          if(!zones.some(zone=>zone.key===key&&zone.start===start&&zone.end===end))zones.push({key,start,end});
+        }
+      }
+      return zones;
+    });
+    const railRun={mode:'rail',path,length:path.at(-1).length,segments,blocks,laneConflict,switches,crossings:crossingsOnRoute,
+      signalZones:signalZonesByDirection[0],signalZonesByDirection};
     const sample=estimate(defaultConsist(route.cargo??'passengers'),route.cargo??'passengers',railRun);
     railRun.travel=Number.isFinite(sample.travel)&&Number.isFinite(sample.returnTravel)?
       (sample.travel+sample.returnTravel)/2:railRun.length*1.6;
@@ -417,19 +536,93 @@
     }
     return lo;
   }
+  function platformDeflection(block,lane){
+    const {profile}=block;
+    return [[profile?.start,block.startPlatform],[profile?.end,block.endPlatform]].reduce((total,[station,platform])=>
+      total+(station&&platform?Math.abs(laneAt(station,0,platform)-lane*laneOffset):0),0);
+  }
+  function requestedLane(block,from){
+    if(block.runningTrack==='left')return -block.direction;
+    if(block.runningTrack==='right')return block.direction;
+    if(block.runningTrack==='directional')return (from?1:-1)*block.direction;
+    return 0;
+  }
+  function platformLane(block){
+    for(const [station,platform] of [[block.profile?.start,block.startPlatform],[block.profile?.end,block.endPlatform]]){
+      if(!station?.shortApproach||!platform)continue;
+      const offset=laneAt(station,0,platform);
+      if(Math.abs(Math.abs(offset)-laneOffset)<1e-6)return Math.sign(offset);
+    }
+    return 0;
+  }
+  function canChangeRails(before,after){
+    const beforeTapers=before.direction===1?before.profile?.taperEnd:before.profile?.taperStart;
+    const afterTapers=after.direction===1?after.profile?.taperStart:after.profile?.taperEnd;
+    return beforeTapers&&afterTapers;
+  }
+  function resolveRunningLanes(blocks){
+    // A section boundary on parallel track has no physical way to change rails.
+    // Resolve its lane together with the rest of the continuous pair.
+    let conflict=false;
+    for(let first=0;first<blocks.length;first++){
+      if(blocks[first].tracks!==2)continue;
+      let end=first+1;
+      while(blocks[end]?.tracks===2&&!canChangeRails(blocks[end-1],blocks[end]))end++;
+      const stretch=blocks.slice(first,end);
+      const required=new Set();
+      const assigned=stretch.some(block=>block.startPlatform||block.endPlatform);
+      let constraint;
+      for(const block of stretch){
+        block.laneGroup=first;
+        const platform=platformLane(block);
+        if(block.turnoutLane){
+          constraint='turnout';
+          required.add(block.turnoutLane*block.direction);
+        }
+        if(platform){
+          constraint??='platform';
+          required.add(platform*block.direction);
+        }
+      }
+      if(required.size>1)conflict=true;
+      for(const block of stretch)block.laneConstraint=constraint;
+      for(const from of [0,1]){
+        const score=side=>stretch.reduce((cost,block)=>{
+          const lane=side*block.direction,requested=requestedLane(block,from);
+          if(requested&&lane!==requested)cost+=1;
+          return cost+platformDeflection(block,lane);
+        },0);
+        const left=score(-1),right=score(1);
+        const side=required.size===1?[...required][0]:left===right?(assigned||!from?-1:1):left<right?-1:1;
+        for(const block of stretch)(block.lanes??=[])[from]=side*block.direction;
+      }
+      first=end-1;
+    }
+    return conflict;
+  }
   // Lane sign is relative to the stored section geometry. A/B describe the service endpoints.
   function runningLane(block,from){
     if(block.tracks!==2)return 0;
-    const right=block.runningTrack==='right'||(block.runningTrack!=='left'&&from===1);
-    return (right?1:-1)*block.direction;
+    return (block.lanes?.[from]??block.turnoutLane??requestedLane(block,from))||((from?1:-1)*block.direction);
+  }
+  function runningTrackChoice(block){
+    const outbound=runningLane(block,0),returning=runningLane(block,1);
+    if(outbound!==returning)return 'directional';
+    return outbound*block.direction===1?'right':'left';
+  }
+  function preferredRunningTrack(block){
+    if(!block||block.tracks!==2)return 'auto';
+    if(block.turnoutLane)return block.turnoutLane*block.direction===1?'right':'left';
+    return platformDeflection(block,block.direction)<platformDeflection(block,-block.direction)?'right':'left';
   }
   function blockKeys(run,from){
     return [...run.blocks.map(block=>'track:'+block.id+(block.tracks===2?'/'+(-runningLane(block,from)):'')),
-      ...run.switches.map(end=>'junction:'+end),...run.crossings];
+      ...new Set(signalWindows(run,from).map(zone=>zone.key))];
   }
   function signalWindows(run,from){
     const total=run.length*metresPerUnit;
-    return (run.signalZones??[]).map(zone=>from?{...zone,start:total-zone.end,end:total-zone.start}:zone);
+    const zones=run.signalZonesByDirection?.[from]??run.signalZones??[];
+    return from?zones.map(zone=>({...zone,start:total-zone.end,end:total-zone.start})):zones;
   }
   const speedForCurve=radius=>Math.sqrt(Math.max(3,radius)*.85);
   const profiles=new WeakMap(),estimates=new WeakMap();
@@ -537,6 +730,17 @@
     const a=run.path[i],b=run.path[i+1],span=b.length-a.length,f=(distance-a.length)/span;
     const dx=(b.x-a.x)/span,dy=(b.y-a.y)/span;
     const block=run.blocks.find(block=>distance<=block.end)??run.blocks.at(-1);
+    if(block.profile){
+      const canonical=block.direction===1?distance-block.start:block.end-distance;
+      const {distances}=block.profile,points=serviceRail(block,state.from);
+      let low=0,high=distances.length-1;
+      while(high-low>1){const mid=(low+high)>>1;if(distances[mid]<=canonical)low=mid;else high=mid;}
+      const p=points[low],q=points[high],len=distances[high]-distances[low];
+      const t=(canonical-distances[low])/(len||1),sign=direction*block.direction;
+      const yaw=Math.atan2((q.y-p.y)*sign,(q.x-p.x)*sign);
+      return {x:p.x+(q.x-p.x)*t,y:p.y+(q.y-p.y)*t,z:p.z+(q.z-p.z)*t,
+        tunnel:Boolean((t<.5?p:q).tunnel),yaw,angle:yaw,pitch:Math.atan2((q.z-p.z)*sign,len),direction};
+    }
     const offset=local=>{
       const lane=runningLane(block,state.from);
       if(!block.profile)return block.direction*lane*laneOffset;
@@ -561,5 +765,5 @@
     }
     return Math.round((span*40*245+bridges*40*815)*(regional?.25:1));
   }
-  window.ContourRail={connectionCost,signalWindows,secondTrackCost,locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,runningLane,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trackTangent,trainSpan};
+  window.ContourRail={minHorizontalRadius,horizontalRadius,horizontalRadiusIssue,runningTrackRadius,preferredRunningTrack,runningTrackChoice,doubleThrough,laneVector,branchConnection,serviceRail,connectionCost,signalWindows,secondTrackCost,locomotives,cars,defaultConsist,quote,estimate,run,pose,advance,conditions,runningLane,blockKeys,metresPerUnit,speedLimit,massFor,turnoutFlags,taperFactor,turnoutLength,stationLayout,stationPoint,stationFootprint,stationTrackCount,trackLines,trackTangent,trainSpan};
 })();

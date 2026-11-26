@@ -66,6 +66,19 @@
     });
   }
 
+  function railLayout(run,index,project){
+    const paths=[],segments=[];
+    for(const block of run?.blocks??[]){
+      const directions=ContourRail.runningLane(block,0)===ContourRail.runningLane(block,1)?[0]:[0,1];
+      for(const from of directions){
+        const points=ContourRail.serviceRail(block,from).map(project);
+        if(points.length<2)continue;
+        paths.push({points,dashed:from===1});
+        for(let i=1;i<points.length;i++)segments.push([points[i-1],points[i]]);
+      }
+    }
+    return {index,paths,segments,lines:[],badges:[]};
+  }
   function segmentDistance(x,y,a,b){
     const dx=b[0]-a[0],dy=b[1]-a[1],length=dx*dx+dy*dy;
     const t=length?clamp(((x-a[0])*dx+(y-a[1])*dy)/length,0,1):0;
@@ -82,8 +95,15 @@
       const distance=line.group.length>1?Math.min(offsetDistance,segmentDistance(x,y,line.a,line.b)):offsetDistance;
       if(distance<best){best=distance;group=line.group;}
     }
+    const railDistances=hits.filter(hit=>hit.segments?.length).map(hit=>({
+      index:hit.index,distance:hit.segments.reduce((min,[a,b])=>Math.min(min,segmentDistance(x,y,a,b)),13),
+    }));
+    const nearest=Math.min(13,...railDistances.map(rail=>rail.distance));
+    if(nearest<13&&nearest<=best){
+      return railDistances.filter(rail=>rail.distance<13&&rail.distance<nearest+1.25).map(rail=>rail.index);
+    }
     return group;
   }
 
-  window.ContourRouteOverlay={sharedSegments,layout,pick,color:index=>colors[index%colors.length]};
+  window.ContourRouteOverlay={sharedSegments,layout,railLayout,pick,color:index=>colors[index%colors.length]};
 })();

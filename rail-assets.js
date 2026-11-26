@@ -130,12 +130,12 @@
         p(left+lane*startTaper,lift),q(left+lane*endTaper,lift),
         q(right+lane*endTaper,lift),p(right+lane*startTaper,lift)
       ],color);
-      ribbon(-ballast,ballast,.023,bridge?'#8c8171':'#a29785');
-      for(const side of [-1,1]){
+      if(!path.railOnly)ribbon(-ballast,ballast,.023,bridge?'#8c8171':'#a29785');
+      if(!path.railOnly)for(const side of [-1,1]){
         const lip=side*ballast;
         face([p(lip,bridge?-.087:-.012),q(lip,bridge?-.087:-.012),q(lip,.023),p(lip,.023)],bridge?'#766b5f':'#807563');
       }
-      if(bridge&&!a.gradeSeparation&&!b.gradeSeparation&&Math.floor(accumulated/1.9)!==Math.floor((accumulated+length)/1.9)){
+      if(!path.railOnly&&bridge&&!a.gradeSeparation&&!b.gradeSeparation&&Math.floor(accumulated/1.9)!==Math.floor((accumulated+length)/1.9)){
         const z=(a.z+b.z)/2;
         box((a.x+b.x)/2,(a.y+b.y)/2,.012,.21,ballast*1.1,Math.max(.01,z-.095),'#887d6b');
       }
@@ -147,7 +147,7 @@
         };
         for(const lane of lanes){
           const d=lane*taper(until),left=d-.085,right=d+.085;
-          face([point(left,.035,-.016),point(right,.035,-.016),point(right,.035,.016),point(left,.035,.016)],'#615047');
+          if(!path.railOnly)face([point(left,.035,-.016),point(right,.035,-.016),point(right,.035,.016),point(left,.035,.016)],'#615047');
         }
         until+=sleeperPitch;
       }

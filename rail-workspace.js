@@ -6,13 +6,13 @@ window.createRailWorkspace=function({getValley,designSection,savePath,buildTrack
   const root=document.createElement('section');
   root.id='railWorkspace';root.hidden=true;
   root.setAttribute('role','dialog');root.setAttribute('aria-modal','true');root.setAttribute('aria-label','Railway');
-  root.innerHTML=`<div class="rw-header"><strong>Railway</strong><button data-act="close">Done</button></div>
+  root.innerHTML=`<div class="rw-header"><strong class="rw-title">Railway</strong><button data-act="close">Done</button></div>
     <nav><button data-tool="path">Service paths</button><button data-tool="draw">Connect tracks</button><button data-tool="cut">Remove section</button><select aria-label="Rail service"></select></nav><div class="rw-lines" aria-label="Service colours"></div>
     <div class="rw-map"><canvas aria-label="Railway diagram"></canvas><div class="rw-zoom"><button data-act="out" aria-label="Zoom out">−</button><button data-act="in" aria-label="Zoom in">+</button></div></div>
-    <p class="rw-key">Solid outbound · dashed return · amber dots automatic signals</p><div class="rw-sections"></div><footer><p role="status"></p><div><button data-act="reset">Reset</button><button data-act="undo">Undo point</button><button data-act="apply">Save path</button></div></footer>`;
+    <p class="rw-key">Solid outbound · dashed return · amber dots automatic signals</p><div class="rw-sections"></div><footer><p role="status"></p><div><button data-act="reset">Reset</button><button data-act="undo">Undo</button><button data-act="apply">Save path</button></div></footer>`;
   document.body.append(root);
   const q=s=>root.querySelector(s),canvas=q('canvas'),ctx=canvas.getContext('2d'),select=q('select');
-  let gesture=null,suppressClick=false;
+  let gesture=null,suppressClick=false,platforms=[],platformHits=[],sectionHits=[],undo=[],activeSection=0,draftRun=null,physicalRails=[];
   let tool='path',routeIndex=0,path=[],lanes=[],picks=[],handles=[],section,view,message='',choosing=false;
   const valley=()=>getValley(),tracks=()=>valley().transport.railTracks??{},stations=()=>valley().transport.railStations??{};
   const route=()=>valley().transport.routes[routeIndex];
@@ -21,10 +21,27 @@ window.createRailWorkspace=function({getValley,designSection,savePath,buildTrack
   const world=p=>({x:view.x+(p.x-canvas.clientWidth/2)/view.scale,y:view.y+(p.y-canvas.clientHeight/2)/view.scale});
   const oriented=leg=>leg.direction===-1?[...tracks()[leg.id].points].reverse():tracks()[leg.id].points;
   const endpoint=()=>path.length?(path.at(-1).direction===1?tracks()[path.at(-1).id].to:tracks()[path.at(-1).id].from):route()?.stations[0].id;
+  function checkpoint(){
+    undo.push(structuredClone({path,lanes,picks,handles,platforms,choosing,activeSection}));
+  }
+  function setPlatform(side,platform){
+    if(platforms[side]===platform)return;
+    checkpoint();platforms[side]=platform;message='';render();
+  }
+  function setLane(index,lane){
+    const block=draftRun?.blocks[index];
+    if(!block||block.laneConstraint)return;
+    const group=draftRun.blocks.flatMap((part,i)=>part.laneGroup===block.laneGroup?[i]:[]);
+    if(group.every(i=>lanes[i]===lane))return;
+    checkpoint();
+    for(const i of group)lanes[i]=lane;
+    activeSection=index;message='';render();
+  }
   function reset(){
     message='';picks=[];handles=[];section=null;choosing=false;
     path=(route()?.trackIds??[]).map((id,i)=>({id,direction:route().trackDirections?.[i]??1}));
-    lanes=path.map((_,i)=>route().trackLanes?.[i]??route().runningTrack??'auto');render();
+    lanes=path.map((_,i)=>route().trackLanes?.[i]??route().runningTrack??'auto');
+    platforms=route()?.platforms?.slice()??[1,1];undo=[];activeSection=0;render();
   }
   function fit(){
     const points=Object.values(tracks()).flatMap(t=>t.points);
@@ -66,49 +83,52 @@ window.createRailWorkspace=function({getValley,designSection,savePath,buildTrack
     const ratio=devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;
     canvas.width=w*ratio;canvas.height=h*ratio;ctx.scale(ratio,ratio);
     ctx.fillStyle='#202c27';ctx.fillRect(0,0,w,h);
-    function line(points,color,width,offset=0){
+    function line(points,color,width){
       ctx.beginPath();points.forEach((p,i)=>{
-        const a=points[Math.max(0,i-1)],b=points[Math.min(points.length-1,i+1)],n=gap(a,b)||1;
-        const s=screen({x:p.x-(b.y-a.y)*offset/n,y:p.y+(b.x-a.x)*offset/n});
+        const s=screen(p);
         if(i)ctx.lineTo(s.x,s.y);else ctx.moveTo(s.x,s.y);
       });ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineCap='round';ctx.lineJoin='round';ctx.stroke();
     }
-    for(const track of Object.values(tracks())){
-      line(track.points,'#64796d',track.tracks===2?7:4);
-      if(track.tracks===2)line(track.points,'#202c27',2);
-    }
-    const users=new Map();
-    valley().transport.routes.forEach((r,i)=>{
-      if(r.mode==='rail')for(const id of r.trackIds??[]){
-        if(!users.has(id))users.set(id,[]);
-        users.get(id).push(i);
-      }
-    });
-    valley().transport.routes.forEach((r,i)=>{
-      if(r.mode!=='rail')return;
-      const color=ContourRouteOverlay.color(i);
-      (r.trackIds??[]).forEach((id,j)=>{
-        const track=tracks()[id];if(!track)return;
-        const direction=r.trackDirections?.[j]??1;
-        const lane=r.trackLanes?.[j]??r.runningTrack??'auto';
-        // Draw each service beside the physical lane it uses. All services stay visible.
-        const group=users.get(id)??[i],ribbon=(group.indexOf(i)-(group.length-1)/2)*4;
-        const offset=((track.tracks===2?(lane==='right'?1:-1)*direction*5:0)+ribbon)/view.scale;
-        line(track.points,color,i===routeIndex?3:1.5,offset);
-        if(track.tracks===2&&lane==='auto'){
-          ctx.setLineDash([4,4]);line(track.points,color,1.3,-offset);ctx.setLineDash([]);
+    const transport=valley().transport;
+    for(const rail of physicalRails)line(rail.points,'#74867b',2);
+    function drawService(run,index,selected){
+      if(!run?.blocks)return;
+      const color=ContourRouteOverlay.color(index);
+      ctx.globalAlpha=selected?1:.47;
+      run.blocks.forEach((block,section)=>{
+        const outbound=ContourRail.serviceRail(block,0),returning=ContourRail.serviceRail(block,1);
+        line(outbound,color,selected?(section===activeSection?3:2):1.25);
+        if(ContourRail.runningLane(block,0)!==ContourRail.runningLane(block,1)){
+          ctx.setLineDash([4,4]);line(returning,color,selected?2:1.25);ctx.setLineDash([]);
         }
       });
+      ctx.globalAlpha=1;
+    }
+    transport.routes.forEach((r,i)=>{
+      if(r.mode==='rail'&&(tool!=='path'||i!==routeIndex))drawService(valley().truckRuns?.[i],i,false);
     });
-    if(choosing)path.forEach((leg,i)=>{
-      if(!tracks()[leg.id])return;
-      const offset=tracks()[leg.id].tracks===2?(lanes[i]==='right'?1:-1)*leg.direction*3/view.scale:0;
-      line(tracks()[leg.id].points,'#fff3bd',3,offset);
-    });
-    for(const [i,leg] of path.entries()){
+    if(tool==='path')drawService(draftRun,routeIndex,true);
+    sectionHits=[];
+    if(tool==='path')for(const [i,leg] of path.entries()){
       const t=tracks()[leg.id];if(!t)continue;
-      const p=screen(t.points[Math.floor(t.points.length/2)]);
-      ctx.fillStyle='#25372c';ctx.beginPath();ctx.arc(p.x,p.y,9,0,Math.PI*2);ctx.fill();
+      const middle=Math.floor(t.points.length/2);
+      const p=screen(t.points[middle]);
+      const double=t.tracks===2;
+      if(double&&i===activeSection&&!draftRun?.blocks[i]?.laneConstraint){
+        const tangent=ContourRail.trackTangent(t,middle),color=ContourRouteOverlay.color(routeIndex);
+        for(const [lane,side] of [['left',-1],['right',1]]){
+          const offset=side*leg.direction;
+          const x=p.x-tangent.y*offset*25,y=p.y+tangent.x*offset*25;
+          const rail=screen({...t.points[middle],x:t.points[middle].x-tangent.y*offset*.13,y:t.points[middle].y+tangent.x*offset*.13});
+          ctx.beginPath();ctx.moveTo(rail.x,rail.y);ctx.lineTo(x,y);ctx.strokeStyle=color;ctx.lineWidth=1;ctx.stroke();
+          ctx.beginPath();ctx.arc(x,y,12,0,Math.PI*2);const selected=ContourRail.runningTrackChoice(draftRun.blocks[i])===lane;ctx.fillStyle=selected?color:'#25372c';ctx.fill();
+          ctx.stroke();ctx.textAlign='center';ctx.font='bold 12px system-ui';
+          ctx.fillStyle=selected?'#25372c':'#fff3bd';ctx.fillText(lane==='left'?'L':'R',x,y+4);
+          sectionHits.push({x,y,index:i,lane});
+        }
+      }
+      if(double)sectionHits.push({...p,index:i});
+      ctx.fillStyle=double&&i===activeSection?'#47624e':'#25372c';ctx.beginPath();ctx.arc(p.x,p.y,9,0,Math.PI*2);ctx.fill();
       ctx.fillStyle='#fff3bd';ctx.font='11px system-ui';ctx.textAlign='center';ctx.fillText(i+1,p.x,p.y+4);ctx.textAlign='start';
     }
     if(tool==='cut'&&picks.length===2&&picks[0].trackId===picks[1].trackId){
@@ -125,6 +145,27 @@ window.createRailWorkspace=function({getValley,designSection,savePath,buildTrack
       for(let attempt=0;attempt<5&&labels.some(label=>Math.abs(y-label.y)<14&&p.x+8<label.x+label.width&&p.x+8+width>label.x);attempt++)y+=15;
       ctx.fillText(station.name,p.x+8,y);labels.push({x:p.x+8,y,width});
     }
+    platformHits=[];
+    if(tool==='path')route()?.stations.forEach((station,side)=>{
+      const layout=ContourRail.stationLayout(station,ContourRail.stationTrackCount(station,valley().transport));
+      const middle=(layout.start+layout.end)/2;
+      const radius=13,spacing=26/view.scale;
+      const center=screen(station);
+      layout.platforms.forEach((pad,index)=>{
+        const offset=(pad.near+pad.far)/2;
+        const neighbor=layout.platforms.find(other=>other.index!==pad.index&&other.near===pad.near);
+        const along=middle+(neighbor?(pad.index<neighbor.index?-1:1)*spacing*.6:0);
+        const p=screen(ContourRail.stationPoint(station,along,offset+Math.sign(offset||1)*spacing));
+        const color=ContourRouteOverlay.color(routeIndex),selected=platforms[side]===pad.index;
+        ctx.beginPath();ctx.moveTo(center.x,center.y);ctx.lineTo(p.x,p.y);ctx.strokeStyle='#9ab7a3';ctx.lineWidth=1;ctx.stroke();
+        ctx.beginPath();ctx.arc(p.x,p.y,radius,0,Math.PI*2);
+        ctx.fillStyle=selected?color:'#233a2e';ctx.fill();
+        ctx.strokeStyle=color;ctx.lineWidth=2;ctx.stroke();
+        ctx.fillStyle=selected?'#1a241e':'#edf4e6';ctx.font='700 15px system-ui';ctx.textAlign='center';
+        ctx.fillText(pad.index,p.x,p.y+5);ctx.textAlign='start';
+        platformHits.push({...p,side,platform:pad.index});
+      });
+    });
     for(const [i,pick] of picks.entries()){
       const p=screen(resolve(pick));ctx.fillStyle='#ffdc87';ctx.beginPath();ctx.arc(p.x,p.y,7,0,Math.PI*2);ctx.fill();
       ctx.fillText(i?'Exit':'Entry',p.x+10,p.y+15);
@@ -140,7 +181,14 @@ window.createRailWorkspace=function({getValley,designSection,savePath,buildTrack
     }
   }
   function render(){
+    physicalRails=Object.values(tracks()).flatMap(track=>ContourRail.trackLines(track,valley().transport).lines);
+    draftRun=tool==='path'&&route()&&path.length?ContourRail.run({...route(),platforms,
+      trackIds:path.map(leg=>leg.id),trackDirections:path.map(leg=>leg.direction),trackLanes:lanes},valley().transport):null;
     select.hidden=tool!=='path';
+    const title=q('.rw-title');
+    title.textContent=tool==='path'&&route()?'Editing line '+(routeIndex+1):'Railway';
+    title.style.color=tool==='path'&&route()?ContourRouteOverlay.color(routeIndex):'';
+    button('undo').disabled=!undo.length;
     const legend=q('.rw-lines');legend.replaceChildren();
     valley().transport.routes.forEach((r,index)=>{
       if(r.mode!=='rail')return;
@@ -155,20 +203,49 @@ window.createRailWorkspace=function({getValley,designSection,savePath,buildTrack
     const rows=q('.rw-sections');rows.replaceChildren();
     if(tool==='path'&&route()){
       const choose=document.createElement('button');choose.textContent='Choose a new path';
-      choose.onclick=()=>{choosing=true;path=[];lanes=[];message='Start at '+route().stations[0].name+'. Tap connected track sections toward '+route().stations[1].name+'.';render();};
+      choose.onclick=()=>{checkpoint();choosing=true;path=[];lanes=[];message='Start at '+route().stations[0].name+'. Tap connected track sections toward '+route().stations[1].name+'.';render();};
       rows.append(choose);
-      path.forEach((leg,i)=>{
-        const b=document.createElement('button'),track=tracks()[leg.id];
-        b.textContent=(i+1)+' · '+(track?.tracks===2?(lanes[i]==='auto'?'By direction':lanes[i]==='left'?'Left both ways':'Right both ways'):'Single');
-        b.disabled=track?.tracks!==2;
-        b.onclick=()=>{lanes[i]=lanes[i]==='auto'?'left':lanes[i]==='left'?'right':'auto';render();};
-        rows.append(b);
+      const picker=(label,options,value,apply)=>{
+        const wrap=document.createElement('label'),input=document.createElement('select');
+        input.setAttribute('aria-label',label);
+        input.add(new Option(label,value,true,true));input.options[0].disabled=true;
+        for(const [key,name] of options)input.add(new Option(name,key));
+        input.selectedIndex=0;input.onchange=()=>apply(input.value);wrap.append(input);return wrap;
+      };
+      route().stations.forEach((station,side)=>{
+        const pads=Array.from({length:station.platformCount??1},(_,i)=>[i+1,'Platform '+(i+1)]);
+        if(pads.length>1)rows.append(picker((side?'B':'A')+' · Platform '+platforms[side],pads,platforms[side],
+          value=>setPlatform(side,+value)));
       });
+      const doubles=path.flatMap((leg,i)=>tracks()[leg.id]?.tracks===2?[i]:[]);
+      if(doubles.length>1){
+        rows.append(picker('All double sections',[['left','Left both ways'],['right','Right both ways'],['auto','Follow platforms'],['directional','By direction']],'',lane=>{
+          checkpoint();
+          for(const i of doubles)if(!draftRun?.blocks[i]?.laneConstraint)lanes[i]=lane;
+          render();
+        }));
+      }
+      if(doubles.length&&!doubles.includes(activeSection))activeSection=doubles[0];
+      if(doubles.length){
+        const i=activeSection;
+        const constraint=draftRun?.blocks[i]?.laneConstraint;
+        if(constraint){
+          const fixed=document.createElement('button');fixed.disabled=true;
+          fixed.textContent=(i+1)+(constraint==='platform'?' · Platform rail':' · Junction rail');
+          rows.append(fixed);
+        }else{
+          const choices=[['auto','Follow platforms'],['directional','By direction'],['left','Left both ways'],['right','Right both ways']];
+          const control=picker((i+1)+' · '+(choices.find(([lane])=>lane===lanes[i])?.[1]??'Follow platforms'),choices,lanes[i],lane=>setLane(i,lane));
+          control.firstChild.dataset.section=i;
+          control.firstChild.setAttribute('aria-label','Running track for section '+(i+1));
+          rows.append(control);
+        }
+      }
     }
-    const ready=tool==='path'?path.length&&endpoint()===route()?.stations[1].id:tool==='draw'?section&&!section.issue:picks.length===2;
+    const ready=tool==='path'?path.length&&endpoint()===route()?.stations[1].id&&!draftRun?.laneConflict:tool==='draw'?section&&!section.issue:picks.length===2;
     button('apply').disabled=!ready;
     button('apply').textContent=tool==='path'?'Save path':tool==='draw'?'Build connection':'Remove section';
-    q('[role=status]').textContent=message||(tool==='path'?'Select a service. Numbered circles match the sections below. Tap a double-track section button to set its running line.':
+    q('[role=status]').textContent=message||(tool==='path'?(draftRun?.laneConflict?'The selected connections use opposite rails. Choose a different path or platform.':'Tap a platform or a numbered double-track section. L or R selects the same rail across connected sections.'):
       tool==='draw'?(picks.length<2?'Tap entry and exit on existing track.':'Tap to add bends to the green connection.'):
       'Tap two points on the same track to mark a short section. Reroute services using it before removal.');
     if(tool==='draw'&&section)q('[role=status]').textContent=message||section.issue||Math.round(section.length*40)+' m · '+ContourRail.connectionCost(section,valley().region==='mixed').toLocaleString()+' cr';
@@ -179,7 +256,17 @@ window.createRailWorkspace=function({getValley,designSection,savePath,buildTrack
     if(suppressClick){suppressClick=false;return;}
     message='';
     if(tool==='path'){
-      if(!choosing){message='Choose a new path to start selecting connected sections.';render();return;}
+      const pad=platformHits.find(hit=>gap(p,hit)<17);
+      if(pad){setPlatform(pad.side,pad.platform);return;}
+      if(!choosing){
+        const control=sectionHits.find(hit=>gap(p,hit)<13);
+        if(control?.lane){setLane(control.index,control.lane);return;}
+        const index=control?.index??path.findIndex(part=>part.id===pick?.trackId);
+        if(index>=0&&tracks()[path[index].id].tracks===2){
+          activeSection=index;render();
+        }else{message='Tap a numbered platform or use Choose a new path to change the sections.';render();}
+        return;
+      }
       if(!pick){message='Tap closer to a built track.';render();return;}
       const t=tracks()[pick.trackId],node=endpoint();
       if(path.some(leg=>leg.id===t.id)||node!==t.from&&node!==t.to){message='Choose a connected section at the end of the highlighted path.';render();return;}
@@ -195,13 +282,13 @@ window.createRailWorkspace=function({getValley,designSection,savePath,buildTrack
           message='This connection reverses direction. Choose the through track.';render();return;
         }
       }
-      path.push({id:t.id,direction});lanes.push('auto');
+      checkpoint();path.push({id:t.id,direction});lanes.push('auto');activeSection=path.length-1;
     }else if(picks.length<2){
       if(!pick){message='Tap an existing track.';render();return;}
       if(tool==='cut'&&picks.length&&pick.trackId!==picks[0].trackId){message='Choose the exit on the same track.';render();return;}
       if(picks[0]?.trackId===pick.trackId&&picks[0]?.index===pick.index){message='Choose a different exit point.';render();return;}
-      picks.push(pick);preview();
-    }else if(tool==='draw'){handles.push(world(p));preview();}
+      checkpoint();picks.push(pick);preview();
+    }else if(tool==='draw'){checkpoint();handles.push(world(p));preview();}
     render();
   };
   canvas.onpointerdown=e=>{
@@ -227,7 +314,7 @@ window.createRailWorkspace=function({getValley,designSection,savePath,buildTrack
     let result;
     if(tool==='path'){
       const points=path.flatMap((leg,i)=>i?oriented(leg).slice(1):oriented(leg));
-      result=savePath(routeIndex,{...route(),trackIds:path.map(p=>p.id),trackDirections:path.map(p=>p.direction),trackLanes:lanes.slice(),points,capital:0});
+      result=savePath(routeIndex,{...route(),trackIds:path.map(p=>p.id),trackDirections:path.map(p=>p.direction),trackLanes:lanes.slice(),platforms:platforms.slice(),points,capital:0});
     }else if(tool==='draw'){
       result=buildTrack({cuts:cuts(),from:resolve(picks[0]),to:resolve(picks[1]),section});
     }else result=cutTrack(picks);
@@ -238,8 +325,9 @@ window.createRailWorkspace=function({getValley,designSection,savePath,buildTrack
   select.onchange=()=>{routeIndex=Number(select.value);reset();};
   button('reset').onclick=reset;
   button('undo').onclick=()=>{
-    if(tool==='path'){path.pop();lanes.pop();choosing=true;}
-    else if(handles.length)handles.pop();else picks.pop();
+    const previous=undo.pop();
+    if(!previous)return;
+    ({path,lanes,picks,handles,platforms,choosing,activeSection}=previous);
     message='';preview();render();
   };
   button('in').onclick=()=>{view.scale*=1.4;draw();};

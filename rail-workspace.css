@@ -21,3 +21,6 @@
 #railWorkspace .rw-lines{display:flex;gap:5px;padding:0 12px 5px;overflow-x:auto;flex-shrink:0}
 #railWorkspace .rw-lines:empty{display:none}
 #railWorkspace .rw-lines button{min-height:28px;font-size:11px;white-space:nowrap;padding:3px 8px}
+#railWorkspace .rw-lines button[aria-pressed=true]{background:#435649;box-shadow:inset 0 -2px currentColor}
+#railWorkspace .rw-sections label{flex-shrink:0}
+#railWorkspace .rw-sections select{min-width:116px}

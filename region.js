@@ -109,17 +109,23 @@ function seeded(seed){
   let state=seed>>>0;
   return ()=>{state=(Math.imul(state,1664525)+1013904223)>>>0;return state/4294967296;};
 }
-function generate(seed,step){
-  const random=seeded(seed);
+function generate(seed,step,mapGeneration=1){
+  const random=seeded(seed),variation=seeded(seed^0x5ba721dc);
+  const vary=(value,range)=>mapGeneration>=2?value+(variation()*2-1)*range:value;
   const [a,b,c,d]=Array.from({length:4},()=>random()*Math.PI*2);
-  const riverX=y=>6.5*Math.sin(y*.067+a)+2.6*Math.sin(y*.143+b)-.09*y;
+  const riverCentre=vary(0,8),riverSweep=vary(6.5,3.5),riverSlope=vary(.09,.065);
+  const wetlandCentres=[vary(51,4),vary(79,5),vary(108,4)];
+  const west=vary(-43,5),east=vary(39,4);
+  const hillScale=vary(.37,.14),hillWavelength=vary(.094,.027),mesaScale=vary(1.20,.33);
+  const gorgeCentre=vary(-12,19),gorgeSweep=vary(15,6),tributaryCentre=vary(37,9);
+  const riverX=y=>riverCentre+riverSweep*Math.sin(y*.067+a)+2.6*Math.sin(y*.143+b)-riverSlope*y;
   const riverWidth=y=>1.7+.46*Math.sin(y*.089+c)+.40*ease((y+77)/154);
   function channels(y){
     return [
       [riverX(y),riverWidth(y),'valley'],
-      [51+8*Math.sin(y*.065+b)+4*Math.sin(y*.14+c),3.1+1.5*Math.sin(y*.074+a)**2,'swamp'],
-      [79+10*Math.sin(y*.063+a)+3*Math.sin(y*.15+d),4.7+3.5*Math.sin(y*.043+c)**4,'swamp'],
-      [108+8*Math.sin(y*.074+d),4.0+2.2*Math.sin(y*.099+a)**2,'swamp']
+      [wetlandCentres[0]+8*Math.sin(y*.065+b)+4*Math.sin(y*.14+c),3.1+1.5*Math.sin(y*.074+a)**2,'swamp'],
+      [wetlandCentres[1]+10*Math.sin(y*.063+a)+3*Math.sin(y*.15+d),4.7+3.5*Math.sin(y*.043+c)**4,'swamp'],
+      [wetlandCentres[2]+8*Math.sin(y*.074+d),4.0+2.2*Math.sin(y*.099+a)**2,'swamp']
     ];
   }
   function waterEdge(x,y){
@@ -128,8 +134,8 @@ function generate(seed,step){
     return distance;
   }
   const wet=(x,y,margin=0)=>waterEdge(x,y)<margin;
-  const westernEdge=y=>-43+4.0*Math.sin(y*.073+a)+1.6*Math.sin(y*.18+c);
-  const swampEdge=y=>39+4.5*Math.sin(y*.067+b)+1.4*Math.cos(y*.182+d);
+  const westernEdge=y=>west+4.0*Math.sin(y*.073+a)+1.6*Math.sin(y*.18+c);
+  const swampEdge=y=>east+4.5*Math.sin(y*.067+b)+1.4*Math.cos(y*.182+d);
   const biome=(x,y)=>x<westernEdge(y)?'western':x>swampEdge(y)?'swamp':'valley';
   function biomeMix(x,y){
     return [ease((westernEdge(y)-x+5)/10),ease((x-swampEdge(y)+5)/10)];
@@ -137,12 +143,12 @@ function generate(seed,step){
   function natural(x,y){
     const bank=waterEdge(x,y);
     if(bank<=0)return 0;
-    const grass=.82+.37*Math.sin(x*.094+y*.071+a)+.25*Math.cos(y*.13-x*.058+b)+.18*Math.sin(x*.14+y*.20+d);
-    const mesa=1.65+1.20*ease((Math.sin(x*.057+y*.038+c)+.78*Math.cos(y*.073+d)+.55)/1.35)
+    const grass=.82+hillScale*Math.sin(x*hillWavelength+y*.071+a)+.25*Math.cos(y*.13-x*.058+b)+.18*Math.sin(x*.14+y*.20+d);
+    const mesa=1.65+mesaScale*ease((Math.sin(x*.057+y*.038+c)+.78*Math.cos(y*.073+d)+.55)/1.35)
       +.55*ease((Math.sin(y*.103-x*.033+a)+.14)/.65);
-    const gorgeY=-12+15*Math.sin((x+95)*.055+b)+4.7*Math.sin(x*.139+c);
+    const gorgeY=gorgeCentre+gorgeSweep*Math.sin((x+95)*.055+b)+4.7*Math.sin(x*.139+c);
     const canyon=Math.abs(y-gorgeY);
-    const tributary=Math.abs(y-(37+13*Math.sin(x*.076+d)));
+    const tributary=Math.abs(y-(tributaryCentre+13*Math.sin(x*.076+d)));
     const mesaCut=mix(.48,mesa,ease((canyon-3.0)/5.2))*mix(.62,1,ease((tributary-1.2)/3.9));
     const bog=.34+.17*Math.sin(x*.14+y*.073+a)+.12*Math.cos(y*.11-x*.059+d);
     const high=mix(mix(grass,mesaCut,ease((-x-35)/20)),bog,ease((x-29)/24));
@@ -177,7 +183,7 @@ function generate(seed,step){
   ];
   const towns=[];
   for(const [id,name,pattern,zone,x,y] of specs){
-    const site=choose(x,y,zone,8.6,(x,y)=>towns.every(t=>Math.hypot(x-t.x,y-t.y)>49));
+    const site=choose(vary(x,19),vary(y,23),zone,8.6,(x,y)=>towns.every(t=>Math.hypot(x-t.x,y-t.y)>49));
     if(!site)return null;
     towns.push({...site,id,name,pattern,biome:zone,starterGoods:starterByTown[id]});
     pads.push({...site,inner:8.0,outer:15.0});
@@ -185,7 +191,7 @@ function generate(seed,step){
   const industries=[];
   for(const [id,name,zone,x,y,asset,output,inputs,limit] of roster){
     const minimum=id==='sawmill'?33:29;
-    const site=choose(x,y,zone,3.55,(x,y)=>towns.every(t=>Math.hypot(x-t.x,y-t.y)>=minimum)&&
+    const site=choose(vary(x,16),vary(y,24),zone,3.55,(x,y)=>towns.every(t=>Math.hypot(x-t.x,y-t.y)>=minimum)&&
       industries.every(t=>Math.hypot(x-t.x,y-t.y)>=9.2));
     if(!site)return null;
     const model=['fish','reeds','fabric','peat','logs','boards'].includes(id)?'swampIndustry':'industry';
@@ -215,12 +221,12 @@ function generate(seed,step){
     });
   }
   for(const [id,name,zone,x,y,asset,output,inputs,limit,model='industry'] of advanced){
-    const site=choose(x,y,zone,3.55,(px,py)=>separated(px,py)&&
+    const site=choose(vary(x,16),vary(y,24),zone,3.55,(px,py)=>separated(px,py)&&
       towns.every(t=>Math.hypot(px-t.x,py-t.y)>=15));
     if(!site)return null;
     addSite(site,id,name,zone,asset,model,output,inputs,limit);
   }
-  const depotPad=choose(18,48,'valley',3.55,(x,y)=>separated(x,y)&&towns.every(t=>Math.hypot(x-t.x,y-t.y)>=14));
+  const depotPad=choose(vary(18,16),vary(48,23),'valley',3.55,(x,y)=>separated(x,y)&&towns.every(t=>Math.hypot(x-t.x,y-t.y)>=14));
   if(!depotPad)return null;
   const depot={...depotPad,id:'exchange',name:'Continental Exchange',biome:'valley',depot:true,
     asset:'Freight shed',model:'westernBuilding',cargos:Object.keys(goods),limit:48,halfWidth:1.60,halfDepth:1.38,apron:1.07};
@@ -245,7 +251,7 @@ function generate(seed,step){
     if(zone==='swamp'?bank< -2.1:bank<1.0)continue;
     grove.push([x,y,.65+.52*random(),0,bank]);
   }
-  return {seed,region:'mixed',towns,industries,industry:industries[0],publicDepots:[depot],bounds,riverX,riverWidth,channels,wet,ground,designGround,grove,biome,biomeMix};
+  return {seed,mapGeneration,region:'mixed',towns,industries,industry:industries[0],publicDepots:[depot],bounds,riverX,riverWidth,channels,wet,ground,designGround,grove,biome,biomeMix};
 }
 window.ContourRegion={generate,trade,trades,acceptsTownCargo,townWeeklyDemand,timberStorageCapacity,names,goods,bounds};
 })();

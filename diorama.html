@@ -43,10 +43,10 @@ canvas:active{cursor:grabbing}
 .info strong{color:var(--ink)}
 @media(max-width:400px){.controls{bottom:calc(var(--control-bottom) + 51px)}}
 </style>
-<link rel="stylesheet" href="./road-builder.css?v=0.1.7">
-<link rel="stylesheet" href="./rail-builder.css?v=0.1.7">
-<link rel="stylesheet" href="./rail-workspace.css?v=0.1.7">
-<link rel="stylesheet" href="./network.css?v=0.1.7">
+<link rel="stylesheet" href="./road-builder.css?v=0.1.8">
+<link rel="stylesheet" href="./rail-builder.css?v=0.1.8">
+<link rel="stylesheet" href="./rail-workspace.css?v=0.1.8">
+<link rel="stylesheet" href="./network.css?v=0.1.8">
 </head>
 <body>
 <div id="app">
@@ -56,7 +56,7 @@ canvas:active{cursor:grabbing}
 <canvas id="gpu" aria-hidden="true" hidden></canvas>
 <canvas id="scene" tabindex="0" aria-label="Three-dimensional valley. Pan with one finger, pinch with two, or rotate with three. Arrow keys rotate and tilt."></canvas>
 <div class="caption"><h2 id="look">Diorama studio</h2><p id="description">Loading the scene…</p></div>
-<button id="brand" aria-label="Company finances" aria-describedby="appVersion"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M2 17c4 0 3-11 9-11s6 8 11 5M2 21c6 0 5-11 10-11s6 7 10 5M4 11c2-5 4-9 9-9s6 6 9 5"/></svg><div><b>POCKET LOGISTICS</b><small id="cash">Road network</small><span id="appVersion">v0.1.7</span></div></button>
+<button id="brand" aria-label="Company finances" aria-describedby="appVersion"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M2 17c4 0 3-11 9-11s6 8 11 5M2 21c6 0 5-11 10-11s6 7 10 5M4 11c2-5 4-9 9-9s6 6 9 5"/></svg><div><b>POCKET LOGISTICS</b><small id="cash">Road network</small><span id="appVersion">v0.1.8</span></div></button>
 <div id="timeControls"><time id="calendar"></time><button id="speed" aria-label="Game speed" title="Change game speed">1×</button><div id="mapToggles">
 <button id="toggleRoutes" aria-label="Routes and vehicles" aria-pressed="true" title="Routes and vehicles"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18h9a4 4 0 0 0 0-8H9a2 2 0 0 1 0-4h8"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/></svg></button>
 <button id="toggleLabels" aria-label="Map labels" aria-pressed="true" title="Map labels"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11h-7l-4 3v-3H4zM8 9h8m-8 3h5"/></svg></button>
@@ -131,7 +131,7 @@ canvas:active{cursor:grabbing}
   <div class="panelHead"><h2 id="instructionsTitle">How to play</h2><form method="dialog"><button aria-label="Close instructions">×</button></form></div>
   <ol>
     <li><strong>Check demand.</strong> Tap a town to see what it needs, or an industry to see what it produces.</li>
-    <li><strong>Plan a route.</strong> Choose a road or rail route from <em>New route</em>. Connect two towns for passengers, or an industry to a buyer for its cargo.</li>
+    <li><strong>Plan a route.</strong> Choose a road or rail route from <em>New route</em>. Connect two towns for passengers, or an industry to a buyer for its cargo. Choose <em>Build road only</em> to lay a road for future services.</li>
     <li><strong>Build the line.</strong> Check the highlighted houses and streets while placing each station. Use <em>Elevation profile</em> to adjust the alignment before building. Choose a through station to extend the railway later. Use <em>Add platform</em> to give another service its own stopping track.</li>
     <li><strong>Manage your fleet.</strong> Open a route to check deliveries and profit. For rail, choose <em>Add train</em> or <em>Edit consist</em>. Tap a model to add it, or select a vehicle in the train to move or remove it.</li>
     <li><strong>Clear the map.</strong> Choose <em>Bulldoze</em>, tap an object, review the highlighted section and affected services, then confirm.</li>
@@ -145,12 +145,9 @@ canvas:active{cursor:grabbing}
   <div class="rb-map-area">
     <div class="editorZoom"><button id="rbMapZoomOut" aria-label="Zoom out">−</button><button id="rbMapZoomIn" aria-label="Zoom in">+</button></div>
     <canvas id="rbMap" aria-label="Overhead route construction map"></canvas>
+    <div class="planning-map-key">2.5 m contours · arrows point downhill</div>
   </div>
-  <div class="rb-profile" id="rbProfileWrap" hidden><canvas id="rbProfile" aria-label="Tap to add a vertical intersection point, then drag it to adjust the grade"></canvas><div class="rb-profile-controls" id="rbProfileTools"><label>VIP radius <input type="range" min="120" max="1200" step="10" value="120" id="rbRadius"><output id="rbRadiusValue" for="rbRadius">Select a VIP</output></label><button id="rbRemoveVip">Remove VIP</button><button id="rbAuto">Reset profile</button></div></div>
-  <div id="rbProfileLens" hidden aria-hidden="true">
-    <canvas id="rbProfileLensCanvas"></canvas>
-    <div id="rbProfileLensReadout"></div>
-  </div>
+  <div class="rb-profile" id="rbProfileWrap" hidden><canvas id="rbProfile" aria-label="Tap to add a vertical intersection point, then drag it to adjust the grade"></canvas><div class="rb-profile-controls" id="rbProfileTools"><label>VIP radius <input type="range" min="120" max="20000" step="10" value="120" id="rbRadius"><output id="rbRadiusValue" for="rbRadius">Select a VIP</output></label><button id="rbRemoveVip">Remove VIP</button><button id="rbAuto">Reset profile</button></div></div>
   <div class="rb-editor">
     <p id="rbSummary"></p>
     <div class="rb-options" id="rbCity"></div>
@@ -199,7 +196,7 @@ canvas:active{cursor:grabbing}
     <div class="editorCrossings" id="teCrossings" hidden></div>
     <div class="teActions"><button id="teUndo">Undo point</button><button id="teConfirm" class="buy">Build</button></div></div>
 </dialog>
-<script src="./demolition.js?v=0.1.7"></script><script src="./grade-separation.js?v=0.1.7"></script><script src="./town-network.js?v=0.1.7"></script><script src="./town-editor.js?v=0.1.7"></script><script src="./valley-assets.js?v=0.1.7"></script><script src="./biome-assets.js?v=0.1.7"></script><script src="./region.js?v=0.1.7"></script><script src="./freight.js?v=0.1.7"></script><script src="./rail-sim.js?v=0.1.7"></script><script src="./rail-assets.js?v=0.1.7"></script><script src="./crossings.js?v=0.1.7"></script><script src="./economy.js?v=0.1.7"></script><script src="./finance-charts.js?v=0.1.7"></script><script src="./route-overlay.js?v=0.1.7"></script><script src="./hud.js?v=0.1.7"></script><script src="./network-ui.js?v=0.1.7"></script><script src="./road-builder.js?v=0.1.7"></script><script src="./rail-builder.js?v=0.1.7"></script><script src="./rail-workspace.js?v=0.1.7"></script>
+<script src="./demolition.js?v=0.1.8"></script><script src="./grade-separation.js?v=0.1.8"></script><script src="./town-network.js?v=0.1.8"></script><script src="./town-editor.js?v=0.1.8"></script><script src="./valley-assets.js?v=0.1.8"></script><script src="./biome-assets.js?v=0.1.8"></script><script src="./region.js?v=0.1.8"></script><script src="./freight.js?v=0.1.8"></script><script src="./rail-sim.js?v=0.1.8"></script><script src="./rail-assets.js?v=0.1.8"></script><script src="./crossings.js?v=0.1.8"></script><script src="./economy.js?v=0.1.8"></script><script src="./finance-charts.js?v=0.1.8"></script><script src="./route-overlay.js?v=0.1.8"></script><script src="./hud.js?v=0.1.8"></script><script src="./network-ui.js?v=0.1.8"></script><script src="./road-builder.js?v=0.1.8"></script><script src="./rail-builder.js?v=0.1.8"></script><script src="./rail-workspace.js?v=0.1.8"></script>
 <script>
 (() => {
 'use strict';
@@ -660,8 +657,8 @@ function updateRouteDraftButton(){
   }catch{}
 }
 const seedKey=region=>region==='mixed'?'contour-lines-mixed-seed':'contour-lines-valley-seed';
-function mixedValley(seed){
-  const valley=ContourRegion.generate(seed,trialStep);
+function mixedValley(seed,mapGeneration){
+  const valley=ContourRegion.generate(seed,trialStep,mapGeneration);
   if(!valley)return null;
   valley.grid=trialGrid;
   const random=seededRandom(seed^0x138f0bca);
@@ -1914,8 +1911,15 @@ function buildTransport(route,roads=[],lots=route.removedLots??[]){
   const {stationLayouts,...service}=route;
   if(stationLayouts&&Object.keys(stationLayouts).length)Object.assign(trial.transport.stationLayouts??={},stationLayouts);
   route=service;
-  if(route.mode!=='rail'&&trial.transport.roadArchive)route.roadId=(ContourTown.roadEntries(trial.transport).at(-1)?.[0]??-1)+1;
-  trial.market.book('capital',route.capital);trial.transport.routes.push(route);trial.market.connect(route);
+  if(route.roadOnly||route.mode!=='rail'&&trial.transport.roadArchive){
+    route.roadId=(ContourTown.roadEntries(trial.transport).at(-1)?.[0]??-1)+1;
+  }
+  trial.market.book('capital',route.capital);
+  if(route.roadOnly)(trial.transport.roadArchive??={})[route.roadId]=route;
+  else{
+    trial.transport.routes.push(route);
+    trial.market.connect(route);
+  }
   if(route.extraBays?.length)(trial.transport.extraBays??=[]).push(...route.extraBays);
   applySiteClearance(trial.transport,roads,lots);
   trial.transport.year=growthYear;
@@ -2342,11 +2346,21 @@ function updateGrowthControls(){
   $('growthSpeed').disabled=growthYear>=maxGrowthYear;
 }
 function applyTrial(seed,generated,region=trial?.region??'mixed',options={}){
-  for(let i=0;i<32&&!generated;i++)generated=(region==='mixed'?mixedValley:trialValley)((seed+i)>>>0);
+  for(let i=0;i<32&&!generated;i++){
+    const candidate=(seed+i)>>>0;
+    if(region!=='mixed'){generated=trialValley(candidate);continue;}
+    let mapGeneration=options.demo?1:2;
+    try{
+      const saved=JSON.parse(localStorage.getItem(saveKey({region,seed:candidate})));
+      if(saved&&!options.demo)mapGeneration=saved.mapGeneration??1;
+    }catch{}
+    generated=mixedValley(candidate,mapGeneration);
+  }
   if(!generated){$('seedStatus').textContent='Try another seed';return false;}
   trial=generated;trialLandscape=null;
   Object.assign(trialBounds,trial.bounds??classicBounds);
   trial.transport=options.demo?showcaseTransport(trial):loadTransport(trial);
+  if(trial.region==='mixed')trial.transport.mapGeneration=trial.mapGeneration;
   if(options.difficulty)trial.transport.difficulty=options.difficulty;
   for(const city of trial.towns)for(const road of trial.transport.townRoads?.[city.id]??[])city.lots.push(...(road.lots??[]));
   prepareTransport(trial);
@@ -3372,11 +3386,17 @@ $('effect').onchange=e=>{
   requestFrame();
 };
 const routeBuilder=window.createRoadBuilder?.({
-  getValley:()=>trial,bounds:trialBounds,heightScale:earthHeight,draftKey,stationFaces:stationEditorFaces,
+  getValley:()=>trial,getMapView:planningMapView,bounds:trialBounds,heightScale:earthHeight,draftKey,stationFaces:stationEditorFaces,
   begin:()=>setGrowthSpeed(0),commit:buildTransport,upgradeStation:applyStationUpgrade,finish:()=>{prevTime=0;updateRouteDraftButton();requestFrame();}
 });
+function planningMapView(){
+  const [x,y]=sceneTarget(),scale=baseScale()*camera.zoom;
+  const horizontal=camera.x/scale,vertical=camera.y/(scale*Math.max(.25,Math.sin(camera.pitch)));
+  const cos=Math.cos(camera.yaw),sin=Math.sin(camera.yaw);
+  return {x:x-horizontal*cos-vertical*sin,y:y+horizontal*sin-vertical*cos,zoom:clamp(camera.zoom,1,5)};
+}
 const railBuilder=window.createRailBuilder?.({
-  getValley:()=>trial,bounds:trialBounds,heightScale:earthHeight,draftKey,
+  getValley:()=>trial,getMapView:planningMapView,bounds:trialBounds,heightScale:earthHeight,draftKey,
   begin:()=>setGrowthSpeed(0),finish:()=>{prevTime=0;updateRouteDraftButton();requestFrame();},commit:buildTransport,
   updateRailRoute,updateRailStation,stationFaces:stationEditorFaces,designSection:routeBuilder.designRailSection
 });
@@ -3590,17 +3610,25 @@ function drawRouteOverlay(){
   const paths=routes.map(route=>route.local?route.path:route.points);
   if(routeOverlayCache?.valley!==trial||routeOverlayCache.paths.length!==paths.length||
       paths.some((path,i)=>path!==routeOverlayCache.paths[i])){
-    routeOverlayCache={valley:trial,paths,groups:ribbon.sharedSegments(paths)};
+    routeOverlayCache={valley:trial,paths,groups:ribbon.sharedSegments(paths.map((path,index)=>routes[index].mode==='rail'?[]:path))};
   }
-  routeHits.push(...ribbon.layout(routeOverlayCache.groups,p=>project([p.x,p.y,p.z+.10])));
-  for(const {index,points} of routeHits){
-    const color=ribbon.color(index);
-    const selected=networkUI.activeRoute===index;
-    ctx.lineCap='round';ctx.lineJoin='round';
-    ctx.beginPath();
-    points.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));
-    ctx.strokeStyle='#26312d';ctx.lineWidth=selected?9:6;ctx.stroke();
-    ctx.strokeStyle=color;ctx.lineWidth=selected?5:3;ctx.stroke();
+  const projectRail=p=>project([p.x,p.y,p.z+.065]);
+  const roadHits=ribbon.layout(routeOverlayCache.groups,p=>project([p.x,p.y,p.z+.10]));
+  routeHits.push(...roadHits.map((hit,index)=>routes[index].mode==='rail'?
+    ribbon.railLayout(trial.truckRuns[index],index,projectRail):hit));
+  const ordered=[...routeHits].sort((a,b)=>Number(a.index===networkUI.activeRoute)-Number(b.index===networkUI.activeRoute));
+  for(const hit of ordered){
+    const {index}=hit,color=ribbon.color(index),selected=networkUI.activeRoute===index;
+    for(const {points,dashed} of hit.paths??[{points:hit.points}]){
+      if(points.length<2)continue;
+      ctx.lineCap='round';ctx.lineJoin='round';
+      if(dashed)ctx.setLineDash([5,5]);
+      ctx.beginPath();
+      points.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));
+      ctx.strokeStyle='#26312d';ctx.lineWidth=hit.paths?(selected?4:3):(selected?9:6);ctx.stroke();
+      ctx.strokeStyle=color;ctx.lineWidth=hit.paths?(selected?2.5:1.7):(selected?5:3);ctx.stroke();
+      ctx.setLineDash([]);
+    }
   }
   if(!networkUI.labels)return;
   for(const hit of routeHits){
@@ -3648,7 +3676,7 @@ function restartValley(){
     crypto.getRandomValues(fresh);
     const candidate=fresh[0];
     if(candidate===old.seed||localStorage.getItem(saveKey({...old,seed:candidate})))continue;
-    const generated=(old.region?mixedValley:trialValley)(candidate);
+    const generated=old.region?mixedValley(candidate,2):trialValley(candidate);
     if(!generated)continue;
     applyTrial(candidate,generated,old.region??'classic',{difficulty:old.transport.difficulty});
     saveNetwork();
@@ -3829,11 +3857,22 @@ function upgradeRailTrack(id){
   const transport=trial.transport,track=transport.railTracks?.[id];
   if(!track)return 'This track is no longer available.';
   if(track.tracks===2)return 'This section already has two tracks.';
+  const radius=ContourRail.runningTrackRadius(ContourRail.horizontalRadius(track.points),2);
+  const radiusIssue=ContourRail.horizontalRadiusIssue(radius);
+  if(radiusIssue)return radiusIssue;
   const services=transport.routes.filter(route=>route.mode==='rail'&&route.trackIds?.includes(id));
   if(services.some(activeTrains))return 'Hold trains using this section at a station before adding the second track.';
   const cost=ContourRail.secondTrackCost(track,trial.region==='mixed');
   if(cost>trial.market.state.cash)return 'Insufficient funds for the second track.';
   track.tracks=2;
+  for(const route of services){
+    const run=ContourRail.run(route,transport,earthHeight);
+    route.trackLanes=route.trackIds.map((trackId,index)=>{
+      const previous=route.trackLanes?.[index]??route.runningTrack??'auto';
+      if(trackId!==id||previous!=='auto')return previous;
+      return ContourRail.preferredRunningTrack(run.blocks[index]);
+    });
+  }
   trial.market.book('capital',cost);
   refreshRailway();
   return true;
