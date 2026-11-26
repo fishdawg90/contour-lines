@@ -7,7 +7,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
   const profit=period=>period.revenue-period.expenses;
   let selectedTrack=null,trackFeedback='';
   let routeChoices=[],selectedStop,selectedHome,labels=true,financeEnd=null,financeRange=0,financeView='finances',statsTown='';
-  let selectedTrain=null,railDraft=null,railFeedback='';
+  let selectedTrain=null,railDraft=null,railFeedback='',financeValley,financeWeek;
   const inspectors=new Set(['town','mill','detail','stop','home']);
   function node(tag,text,cls){
     const n=document.createElement(tag);n.textContent=text;if(cls)n.className=cls;return n;
@@ -102,6 +102,12 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
   function monthLabel(month){
     return months[month%12]+' Y'+(Math.floor(month/12)+1);
   }
+  function periodLabel({week,periodWeeks=1}){
+    const date=monthLabel(Math.floor(week/4));
+    if(periodWeeks===4)return date;
+    const end=week%4+1,start=end-periodWeeks+1;
+    return date+' W'+start+(start===end?'':'–'+end);
+  }
   function historyChart(title,samples,series,label,format,ceiling){
     const figure=node('figure','','financeChart');
     const caption=node('figcaption',title);
@@ -129,6 +135,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
   }
   function finance(valley){
     const m=valley.market;
+    financeValley=valley;financeWeek=m.state.week;
     const tabs=node('div','','financeTabs');
     tabs.setAttribute('aria-label','Company history');
     for(const [key,name] of [['finances','Finances'],['satisfaction','Satisfaction'],['trips','Trips']]){
@@ -139,17 +146,20 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     body.append(tabs);
     if(financeView!=='finances'){townHistory(valley);return;}
 
-    const {history,current}=m.state.finance;
-    const all=[...history,{...current,cash:m.state.cash,week:m.state.week}];
-    const monthly=financeRange===0;
+    const allTime=financeRange===0;
     const controls=node('div','','financeControls');
     const range=picker([['0','All time'],['24','24 weeks'],['52','52 weeks'],['104','104 weeks']],
       String(financeRange),value=>{financeRange=Number(value);financeEnd=null;render();},'History range');
-    let samples,label;
-    if(monthly){
+    const all=allTime?m.financeHistory():m.state.finance.history;
+    if(!all.length){
+      controls.classList.add('fullRange');controls.append(range);body.append(controls);
+      body.append(node('p','The first reading will appear when the week closes.','inspectorNotice'));
+      return;
+    }
+    let samples;
+    if(allTime){
       controls.classList.add('fullRange');controls.append(range);
-      samples=m.financeMonths();
-      label=sample=>monthLabel(sample.month);
+      samples=all;
     }else{
       const firstEnd=Math.min(all.length,financeRange);
       const cutoff=financeEnd===null?-1:all.findIndex(sample=>sample.week>financeEnd);
@@ -160,32 +170,36 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       earlier.disabled=start===0;later.disabled=end===all.length;
       controls.append(earlier,range,later);
       samples=all.slice(start,end);
-      label=sample=>'W'+(sample.week+1);
     }
     body.append(controls);
-    const first=samples[0],last=samples.at(-1),live=last.week===m.state.week;
-    const period=monthly?'month':'week';
-    const totals=monthly?samples.reduce((sum,sample)=>{
+    const first=samples[0],last=samples.at(-1);
+    const totals=allTime?samples.reduce((sum,sample)=>{
       sum.revenue+=sample.revenue;sum.operating+=sample.operating;sum.capital+=sample.capital;
       return sum;
     },{revenue:0,operating:0,capital:0}):last;
-    body.append(node('small',label(first)+' – '+label(last)+(live?' · current '+period+' in progress':''),
-      'historyNote'));
-    if(monthly&&(first.firstWeek??0)>0){
-      body.append(node('small','Records start at week '+(first.firstWeek+1)+'. Earlier weeks were dropped by a previous version.','historyNote'));
+    body.append(node('small',periodLabel(first)+' – '+periodLabel(last)+' · completed periods','historyNote'));
+    if(allTime&&(first.firstWeek??first.week)>0){
+      body.append(node('small','Records start at week '+((first.firstWeek??first.week)+1)+'.','historyNote'));
     }
-    body.append(row(monthly?'Recorded revenue':live?'Revenue this week':'Revenue · '+label(last),cash(totals.revenue)),
-      row(monthly?'Recorded running costs':'Running costs'+(live?' this week':' · '+label(last)),cash(totals.operating)),
-      row(monthly?'Recorded investment':'Investment'+(live?' this week':' · '+label(last)),cash(totals.capital)));
+    body.append(row(allTime?'Recorded revenue':'Revenue · '+periodLabel(last),cash(totals.revenue)),
+      row(allTime?'Recorded running costs':'Running costs · '+periodLabel(last),cash(totals.operating)),
+      row(allTime?'Recorded investment':'Investment · '+periodLabel(last),cash(totals.capital)));
+    chartKey(samples);
     const sections=[
       ['Cash balance',[['cash','#b5e39d','Cash']]],
-      [monthly?'Monthly trading':'Weekly trading',[['revenue','#b5e39d','Revenue'],['operating','#f5ae9d','Running costs']]],
-      [monthly?'Monthly investment':'Weekly investment',[['capital','#efc879','Roads and vehicles']]],
+      ['Weekly trading',[['revenue','#b5e39d','Revenue',true],['operating','#f5ae9d','Running costs',true]]],
+      ['Weekly investment',[['capital','#efc879','Roads and vehicles',true]]],
     ];
-    for(const [title,series] of sections)historyChart(title,samples,series,label,cash);
+    for(const [title,series] of sections)historyChart(title,samples,series,periodLabel,cash);
+  }
+  function chartKey(samples,rates=true){
+    body.append(node('small','Faint line · recorded values. Bold line · rolling trend.'+
+      (rates&&samples.some(sample=>sample.periodWeeks>1)?' Older totals are plotted as weekly averages.':''),'historyNote'));
   }
   function townHistory(valley){
-    const {months:records,firstMonth}=valley.market.state.serviceHistory;
+    const {months,weeks}=valley.market.state.serviceHistory;
+    const records=[...months.filter(sample=>!weeks.length||sample.month*4+3<weeks[0].week)
+      .map(sample=>({...sample,week:sample.month*4+3,periodWeeks:4})),...weeks];
     const trips=financeView==='trips';
     const towns=valley.towns.map(town=>[town.id,town.name]);
     if(trips)towns.unshift(['','All towns']);
@@ -194,26 +208,25 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
     controls.append(picker(towns,selected,value=>{statsTown=value;render();},'Town'));
     body.append(controls);
     if(!records.length){
-      body.append(node('p','The first reading will be available after '+monthLabel(firstMonth)+'.','inspectorNotice'));
+      body.append(node('p','The first reading will appear when the week closes.','inspectorNotice'));
       return;
     }
-    const samples=records.map(({month,towns})=>{
+    const samples=records.map(({week,periodWeeks,towns})=>{
       const values=selected?towns[selected]:Object.values(towns).reduce((sum,town)=>{
         sum.intercity+=town.intercity;sum.local+=town.local;return sum;
       },{intercity:0,local:0});
-      return {month,...values};
+      return {week,periodWeeks,...values};
     });
-    const label=sample=>monthLabel(sample.month);
-    body.append(node('small',label(samples[0])+' – '+label(samples.at(-1))+' · completed months','historyNote'));
+    body.append(node('small',periodLabel(samples[0])+' – '+periodLabel(samples.at(-1))+' · completed periods','historyNote'));
+    chartKey(samples,trips);
     if(trips){
-      historyChart('Passenger journeys per month',samples,[['intercity','#b5e39d','Intercity arrivals'],
-        ['local','#89d6dc','Local bus legs']],label,n=>n.toLocaleString('en-GB'));
+      historyChart('Passenger journeys per week',samples,[['intercity','#b5e39d','Intercity arrivals',true],
+        ['local','#89d6dc','Local bus legs',true]],periodLabel,n=>n.toLocaleString('en-GB'));
       body.append(node('small','Intercity trips count at the town where passengers arrive. Each completed bus leg counts separately.','historyNote'));
     }else{
       const cargo=valley.region?['starter','#efc879','Starter goods']:['timber','#efc879','Timber'];
-      historyChart('Satisfaction at month end',samples,[['passengers','#89d6dc','Passengers'],cargo],label,n=>n+'%',100);
-      body.append(node('small',valley.region?'Starter satisfaction weights both starter goods equally. Earlier months may have no starter reading.':
-        'Satisfaction is sampled at month end.','historyNote'));
+      historyChart('Satisfaction',samples,[['passengers','#89d6dc','Passengers'],cargo],periodLabel,n=>n+'%',100);
+      if(valley.region)body.append(node('small','Starter satisfaction weights both starter goods equally.','historyNote'));
     }
   }
   function replaceContent(container,content){
@@ -1264,6 +1277,7 @@ window.createNetworkUI=function({getValley,focus,redraw,zoom,pause,resumeState,s
       return;
     }
     if(!['routes','finance'].includes(view)||body.contains(document.activeElement))return;
+    if(view==='finance'&&financeValley===valley&&financeWeek===valley.market.state.week)return;
     // Keep the active controls and scrolling stable while the ledger updates.
     const original=[...body.childNodes],scroll=body.scrollTop;
     const focused=original.indexOf(document.activeElement);

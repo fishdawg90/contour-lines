@@ -67,6 +67,9 @@ window.ContourEconomy = function(valley) {
   const serviceHistory=state.serviceHistory??={
     firstMonth:Math.ceil((state.week+(state.weekTime>0?1:0))/4),months:[],localTrips:{}
   };
+  serviceHistory.weeks??=[];
+  serviceHistory.firstWeek??=state.week+(state.weekTime>0?1:0);
+  serviceHistory.localWeekTrips??={};
   const migratePassengers=!state.passengerStops;
   state.passengerStops??={};
   const receipts=new WeakMap(),localRoutes=data.localRoutes??=[];
@@ -628,12 +631,29 @@ window.ContourEconomy = function(valley) {
     total.week=sample.week;total.cash=sample.cash;
     total.revenue+=sample.revenue;total.operating+=sample.operating;total.capital+=sample.capital;
   }
-  function financeMonths(){
-    const months=financeArchive.slice();
-    if(months.length)months[months.length-1]={...months.at(-1)};
-    for(const sample of state.finance.history)addFinanceMonth(months,sample);
-    addFinanceMonth(months,{...state.finance.current,cash:state.cash,week:state.week});
-    return months;
+  function financeHistory(){
+    return [...financeArchive.map(sample=>({...sample,periodWeeks:sample.week-(sample.firstWeek??sample.month*4)+1})),
+      ...state.finance.history];
+  }
+  function townReading(city,intercity,local){
+    const percentage=service=>{
+      const rate=cityServiceRate(city,service);
+      return rate===null?null:Math.round(rate*100);
+    };
+    return {intercity,local,passengers:percentage('passengers'),
+      ...(city.starterGoods?{starter:percentage('starter')}:{timber:percentage('timber')})};
+  }
+  function recordServiceWeek(){
+    const week=state.week-1;
+    if(week>=serviceHistory.firstWeek){
+      const towns=Object.fromEntries(valley.towns.map(city=>[city.id,
+        townReading(city,passengerStop(city).lastWeek,serviceHistory.localWeekTrips[city.id]??0)]));
+      serviceHistory.weeks.push({week,towns});
+      if(state.week%4===0&&serviceHistory.weeks.length>520){
+        serviceHistory.weeks=serviceHistory.weeks.filter(sample=>sample.week>=state.week-520);
+      }
+    }
+    serviceHistory.localWeekTrips={};
   }
   function monthlyClose(){
     const month=state.week/4-1;
@@ -663,12 +683,7 @@ window.ContourEconomy = function(valley) {
       stop.lastMonth=stop.monthHandled??0;
       stop.lastDemand=stop.monthDemand??0;
       if(month>=serviceHistory.firstMonth){
-        const percentage=service=>{
-          const rate=cityServiceRate(city,service);
-          return rate===null?null:Math.round(rate*100);
-        };
-        townStats[city.id]={intercity:stop.lastMonth,local:serviceHistory.localTrips[city.id]??0,
-          passengers:percentage('passengers'),...(city.starterGoods?{starter:percentage('starter')}:{timber:percentage('timber')})};
+        townStats[city.id]=townReading(city,stop.lastMonth,serviceHistory.localTrips[city.id]??0);
       }
       t.monthUsed=0;t.monthDemand=0;stop.monthHandled=0;stop.monthDemand=0;
     }
@@ -808,6 +823,7 @@ window.ContourEconomy = function(valley) {
     for(const history of Object.values(homeService))delete history[state.week-serviceWindow];
     state.weekTime=0;
     if(state.week%4===0)monthlyClose();
+    recordServiceWeek();
     if(freight){
       const services=data.routes.filter(route=>fleet(route).vehicles.some(v=>!v.retiring))
         .map(routeTrade).filter(plan=>plan&&plan.cargo!=='passengers'&&isActive(plan.from,plan.to));
@@ -1739,6 +1755,8 @@ window.ContourEconomy = function(valley) {
     if(!count)return;
     const trips=serviceHistory.localTrips;
     trips[city.id]=(trips[city.id]??0)+count;
+    const weekly=serviceHistory.localWeekTrips;
+    weekly[city.id]=(weekly[city.id]??0)+count;
     payLocal(service,vehicle,count,20,trip);
   }
   function payLocal(service,vehicle,count,rate,trip){
@@ -1967,6 +1985,6 @@ window.ContourEconomy = function(valley) {
     satisfaction.initialized=true;
     satisfaction.passengerOutcomes=true;
   }
-  return {state,source,trade,trades,depots,townServices,industryPulse,depotCargoLocked,setDepotCargo,routeTrade,formerDemand,isIndustry,isFreight,freight,homes,orders,townTotals,catchment,coverage,homeSatisfaction,cityServiceRate,serviceTotals,kind,fleet,routeThroughput,financeMonths,step,purchase,setConsist,setRailHold,consistEditPrice,railStatus,railRunningCost,vehicleCapacity,retireVehicle,releaseRouteLoads,vehiclePrice,radius,receipts,
+  return {state,source,trade,trades,depots,townServices,industryPulse,depotCargoLocked,setDepotCargo,routeTrade,formerDemand,isIndustry,isFreight,freight,homes,orders,townTotals,catchment,coverage,homeSatisfaction,cityServiceRate,serviceTotals,kind,fleet,routeThroughput,financeHistory,step,purchase,setConsist,setRailHold,consistEditPrice,railStatus,railRunningCost,vehicleCapacity,retireVehicle,releaseRouteLoads,vehiclePrice,radius,receipts,
     stockLimit,millUpgradeDemand,weekSeconds,weeklyDemand,townProgress,serviceWindow,serviceGraceWeeks,timberMarket,timberOpen,capacity,connect,book,productionLimit,productionEfficiency,weeklyMillOrders,timberBuffer,passengerStop,passengerBuffer,weeklyVisits,isActive,staged,localRoutes,localCatchment,localPose,validLoop,resetLocalFleet,localCargo,localCargoOptions,localStock,yardStock,waitingAt,stopKey,walkingTo:key=>Object.values(people).filter(person=>person.walk?.queue===key).length,walkers:()=>Object.values(people).filter(person=>person.walk).map(walkPosition)};
 };
